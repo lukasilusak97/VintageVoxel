@@ -1,3 +1,4 @@
+using ImGuiNET;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -37,6 +38,9 @@ public class Game : GameWindow
     // Last save/load status shown in the debug overlay.
     private string? _lastSaveStatus;
 
+    // --- Phase 15: Game State Machine ---
+    private GameState _gameState = GameState.MainMenu;
+
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -60,8 +64,7 @@ public class Game : GameWindow
         GL.CullFace(CullFaceMode.Back);
         GL.FrontFace(FrontFaceDirection.Ccw);
 
-        // Capture the mouse cursor so it doesn't leave the window while looking around.
-        CursorState = CursorState.Grabbed;
+        // Start in the main menu — cursor is free until the player clicks Play.
 
         _shader = new Shader("Shaders/shader.vert", "Shaders/shader.frag");
 
@@ -200,13 +203,17 @@ public class Game : GameWindow
     {
         base.OnUpdateFrame(args);
 
-        if (KeyboardState.IsKeyDown(Keys.Escape))
-        {
-            CursorState = CursorState.Normal;
-            Close();
-        }
-
         float dt = (float)args.Time;
+
+        // Feed input into ImGui every frame (keeps its state consistent whether
+        // the overlay is visible or not).
+        _imgui.Update(this, dt);
+
+        // Physics, mouse look, and chunk streaming are gated on the Playing state.
+        // When Paused or in the MainMenu the world is frozen.
+        if (_gameState != GameState.Playing)
+            return;
+
         _camera.PhysicsUpdate(_world, KeyboardState, dt);
 
         // Mouse look: only active when cursor is grabbed (debug overlay closed).
@@ -230,10 +237,6 @@ public class Game : GameWindow
             // Reset so there is no jump when cursor is re-grabbed.
             _firstMove = true;
         }
-
-        // Feed input into ImGui every frame (keeps its state consistent whether
-        // the overlay is visible or not).
-        _imgui.Update(this, dt);
 
         // -----------------------------------------------------------------------
         // Chunk streaming: load chunks entering the render radius, unload those
@@ -367,8 +370,8 @@ public class Game : GameWindow
             _borders.Render(ref view, ref projection);
         }
 
-        // --- ImGui debug dashboard ---
-        if (_debugVisible)
+        // --- ImGui debug dashboard (Playing state only) ---
+        if (_debugVisible && _gameState == GameState.Playing)
         {
             _debugWindow.Draw(
                 fps: (float)(1.0 / args.Time),
@@ -378,6 +381,13 @@ public class Game : GameWindow
                 creativeMode: _camera.CreativeMode,
                 saveStatus: _lastSaveStatus);
         }
+
+        // --- Phase 15: State menus ---
+        if (_gameState == GameState.MainMenu)
+            DrawMainMenu();
+        else if (_gameState == GameState.Paused)
+            DrawPauseMenu();
+
         _imgui.Render(); // Render the ImGui frame (empty if overlay is hidden).
 
         SwapBuffers();
@@ -387,8 +397,9 @@ public class Game : GameWindow
     {
         base.OnMouseDown(e);
 
-        // Guard: ignore clicks that arrive before OnLoad has finished.
+        // Guard: ignore clicks that arrive before OnLoad has finished or when not playing.
         if (_camera is null || _world is null) return;
+        if (_gameState != GameState.Playing) return;
 
         if (e.Button == MouseButton.Left)
         {
@@ -498,25 +509,43 @@ public class Game : GameWindow
     {
         base.OnKeyDown(e);
 
-        // F3 — toggle the debug overlay.
+        // ESC — state machine transitions.
+        if (e.Key == Keys.Escape)
+        {
+            switch (_gameState)
+            {
+                case GameState.Playing:
+                    TransitionToPaused();
+                    break;
+                case GameState.Paused:
+                    TransitionToPlaying();
+                    break;
+                    // MainMenu: ESC does nothing (use the Quit button to exit).
+            }
+            return;
+        }
+
+        // F3 — toggle the debug overlay (Playing state only).
         // When visible: release cursor so ImGui checkboxes are interactive.
         // When hidden:  grab cursor so the FPS camera works again.
-        if (e.Key == Keys.F3)
+        if (e.Key == Keys.F3 && _gameState == GameState.Playing)
         {
             _debugVisible = !_debugVisible;
             CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
         }
 
-        // F — toggle Creative / Survival mode (Phase 10).
-        if (e.Key == Keys.F)
+        // F — toggle Creative / Survival mode (Phase 10). Playing state only.
+        if (e.Key == Keys.F && _gameState == GameState.Playing)
         {
             _camera.CreativeMode = !_camera.CreativeMode;
             // Reset vertical velocity so there is no launch impulse on switch.
             _camera.Velocity = Vector3.Zero;
         }
 
-        // Ctrl+S — save all currently loaded chunks to disk.
-        if (e.Key == Keys.S && (e.Modifiers & OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Control) != 0)
+        // Ctrl+S — save all currently loaded chunks to disk. Playing state only.
+        if (e.Key == Keys.S &&
+            (e.Modifiers & OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Control) != 0 &&
+            _gameState == GameState.Playing)
         {
             int count = WorldPersistence.SaveAll(_savePath, _world);
             _lastSaveStatus = $"Saved {count} chunk(s) at {DateTime.Now:HH:mm:ss}";
@@ -555,4 +584,110 @@ public class Game : GameWindow
         _borders.Dispose();
         _imgui.Dispose();
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 15: State-machine transitions & ImGui menus
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Switches to <see cref="GameState.Playing"/>.
+    /// Grabs the cursor (unless the debug overlay is open) and resets the
+    /// mouse-delta accumulator so there's no camera jump on resume.
+    /// </summary>
+    private void TransitionToPlaying()
+    {
+        _gameState = GameState.Playing;
+        _firstMove = true;
+        // Respect the debug overlay: keep cursor free when F3 window is open.
+        CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
+    }
+
+    /// <summary>
+    /// Switches to <see cref="GameState.Paused"/>.
+    /// Releases the cursor so the player can interact with the pause menu.
+    /// </summary>
+    private void TransitionToPaused()
+    {
+        _gameState = GameState.Paused;
+        CursorState = CursorState.Normal;
+        _firstMove = true;
+    }
+
+    /// <summary>
+    /// Renders the centered main-menu ImGui overlay.
+    /// Called from <see cref="OnRenderFrame"/> when state is <see cref="GameState.MainMenu"/>.
+    /// </summary>
+    private void DrawMainMenu()
+    {
+        var displaySize = ImGui.GetIO().DisplaySize;
+        ImGui.SetNextWindowPos(
+            new System.Numerics.Vector2(displaySize.X * 0.5f, displaySize.Y * 0.5f),
+            ImGuiCond.Always,
+            new System.Numerics.Vector2(0.5f, 0.5f));
+        ImGui.SetNextWindowBgAlpha(0.92f);
+        ImGui.Begin("##mainmenu",
+            ImGuiWindowFlags.NoMove |
+            ImGuiWindowFlags.NoDecoration |
+            ImGuiWindowFlags.AlwaysAutoResize |
+            ImGuiWindowFlags.NoSavedSettings);
+
+        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "VintageVoxel");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (ImGui.Button("Play", new System.Numerics.Vector2(220f, 40f)))
+            TransitionToPlaying();
+
+        ImGui.Spacing();
+
+        if (ImGui.Button("Quit", new System.Numerics.Vector2(220f, 40f)))
+            Close();
+
+        ImGui.End();
+    }
+
+    /// <summary>
+    /// Renders the centered pause-menu ImGui overlay.
+    /// Called from <see cref="OnRenderFrame"/> when state is <see cref="GameState.Paused"/>.
+    /// </summary>
+    private void DrawPauseMenu()
+    {
+        var displaySize = ImGui.GetIO().DisplaySize;
+        ImGui.SetNextWindowPos(
+            new System.Numerics.Vector2(displaySize.X * 0.5f, displaySize.Y * 0.5f),
+            ImGuiCond.Always,
+            new System.Numerics.Vector2(0.5f, 0.5f));
+        ImGui.SetNextWindowBgAlpha(0.92f);
+        ImGui.Begin("##pausemenu",
+            ImGuiWindowFlags.NoMove |
+            ImGuiWindowFlags.NoDecoration |
+            ImGuiWindowFlags.AlwaysAutoResize |
+            ImGuiWindowFlags.NoSavedSettings);
+
+        ImGui.TextColored(new System.Numerics.Vector4(1.0f, 0.85f, 0.3f, 1.0f), "— Paused —");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (ImGui.Button("Resume", new System.Numerics.Vector2(220f, 40f)))
+            TransitionToPlaying();
+
+        ImGui.Spacing();
+
+        if (ImGui.Button("Save & Resume", new System.Numerics.Vector2(220f, 40f)))
+        {
+            int count = WorldPersistence.SaveAll(_savePath, _world);
+            _lastSaveStatus = $"Saved {count} chunk(s) at {DateTime.Now:HH:mm:ss}";
+            TransitionToPlaying();
+        }
+
+        ImGui.Spacing();
+
+        if (ImGui.Button("Quit", new System.Numerics.Vector2(220f, 40f)))
+            Close();
+
+        ImGui.End();
+    }
 }
+

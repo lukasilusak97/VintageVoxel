@@ -165,3 +165,109 @@
 *   **15.3:** Save to `%AppData%/MyVoxelGame/Saves/`.
 
 > **Prompt:** "Start Phase 15. Implement a Region-based saving system. Use Run-Length Encoding to compress chunk data and save it to binary files."
+
+---
+
+## Phase 15: Game State Management (The "Menu" System)
+**Goal:** Stop the game from starting immediately. Create a Flow: Main Menu -> Game -> Pause Menu.
+
+*   **16.1:** Create a `GameState` Enum (`MainMenu`, `Playing`, `Paused`, `Exiting`).
+*   **16.2:** **State Machine:** Create a `GameManager` class that handles transitions.
+    *   If `State == Paused`: Stop the physics loop, unlock the mouse cursor, show the menu.
+    *   If `State == Playing`: Lock cursor, run physics, hide menu.
+*   **16.3:** **Input Handling:** Bind the `ESC` key.
+    *   If Playing -> Switch to Paused.
+    *   If Paused -> Switch to Playing.
+
+> **Prompt:** "Start Phase 16. Implement a Game State Machine. Create a Main Menu state and a Pause state. When I press ESC, pause the game logic (physics/time) and unlock the mouse cursor. Render a simple 'Resume / Quit' menu using ImGui."
+
+---
+
+## Phase 16: Inventory Architecture (The Data Layer)
+**Goal:** The backend logic for holding items.
+
+*   **17.1:** Create an `Item` class (Name, MaxStackSize, TextureID).
+*   **17.2:** Create an `ItemStack` struct (Holds an `Item` reference + `Count` integer).
+*   **17.3:** Create an `Inventory` class.
+    *   It should hold an array of ItemStacks (e.g., `ItemStack[10]` for a hotbar).
+    *   Methods: `AddItem()`, `RemoveItem()`, `HasItem()`.
+*   **17.4:** **Hotbar Selection:** Add a `SelectedSlot` integer (0-9). Use Mouse Scroll Wheel to change it.
+
+> **Prompt:** "Start Phase 17. Create the Backend Inventory System. Define `Item`, `ItemStack`, and `Inventory` classes. Create a 'PlayerInventory' that holds 10 slots. Implement logic to cycle through the Hotbar slots using the mouse scroll wheel."
+
+---
+
+## Phase 17: The HUD (Heads-Up Display)
+**Goal:** Visually rendering the Hotbar and Crosshair on screen.
+
+*   **18.1:** **2D Renderer:** You need a separate rendering pass for 2D elements. Create a `HUDShader` (No view/projection matrices, just Orthographic).
+*   **18.2:** **Crosshair:** Render a small texture in the exact center of the screen.
+*   **18.3:** **Hotbar UI:** Render 10 grey squares at the bottom of the screen.
+*   **18.4:** **Item Icons:** If a slot has an item, render its texture inside the square.
+
+> **Prompt:** "Start Phase 18. Implement the 2D HUD Renderer. Use an Orthographic Projection. Draw a crosshair in the center of the screen. Draw the 10 hotbar slots at the bottom. Render Item Icons inside the slots based on the Player's current inventory data."
+
+---
+
+## Phase 18: Item Interaction & Dropping
+**Goal:** Pick up items from the ground and throw them.
+
+*   **19.1:** Create an `EntityItem` class. This is a 3D object (a mini-block) floating in the world.
+*   **19.2:** **Physics:** Give `EntityItem` simple gravity and collision (so it sits on the ground).
+*   **19.3:** **Pickup Logic:** If Player distance < 1.5 units, add to Inventory and delete the Entity.
+*   **19.4:** **Drop Logic:** Press 'Q' to spawn an `EntityItem` in front of the player and remove it from Inventory.
+
+> **Prompt:** "Start Phase 19. Implement Dropped Items. Create an `EntityItem` class that renders a small spinning version of the block. Add simple physics so it falls to the ground. When the player walks over it, add it to the inventory. Pressing 'Q' should throw the currently held item."
+
+---
+
+## Phase 19: Tool Behaviors & Block Hardness
+**Goal:** Different tools break blocks at different speeds (Vintage Story mechanics).
+
+*   **20.1:** Update `Block` struct: Add `Hardness` (float) and `RequiredTool` (Enum: `Pickaxe`, `Shovel`, `None`).
+*   **20.2:** Create `ToolItem` class inheriting from `Item`. Add `Efficiency` (float) and `ToolType`.
+*   **20.3:** **Breaking Logic:**
+    *   On Left Click, calculate `BreakTime = BlockHardness / ToolEfficiency`.
+    *   If correct tool: Fast break.
+    *   If wrong tool: Slow break (or impossible).
+*   **20.4:** **Visual Feedback:** Render a "cracking" texture overlay based on how long the button is held.
+
+> **Prompt:** "Start Phase 20. Implement Tool mechanics. Assign Hardness values to blocks. Modulate the breaking speed based on the item currently held. If the player holds the mouse, show a progress animation (cracking texture) on the block face."
+
+---
+
+## Phase 20: The "Container" GUI (Chests/Backpack)
+**Goal:** Press 'E' to open full inventory and move items around.
+
+*   **21.1:** **GUI State:** When 'E' is pressed, switch specific inputs (Mouse controls cursor, WASD stops moving player).
+*   **21.2:** **Grid Rendering:** Render the full backpack (e.g., 4 rows of 9).
+*   **21.3:** **Drag & Drop:**
+    *   On Click: Pick up `ItemStack` (attach to Mouse Cursor).
+    *   On Click Again: Place `ItemStack` into the new slot.
+    *   Swap logic: If slot is not empty, swap the held item with the slot item.
+
+> **Prompt:** "Start Phase 21. Create the Inventory GUI. When 'E' is pressed, render the full main inventory grid. Implement Drag-and-Drop logic: clicking a slot should 'lift' the item to the mouse cursor, and clicking again should place it."
+
+---
+
+## Phase 21: Audio System (OpenAL)
+**Goal:** Footsteps, Breaking sounds, Music.
+
+*   **22.1:** Initialize **OpenAL** (using OpenTK.Audio).
+*   **22.2:** Create an `AudioManager` class. Support `PlaySound(string file, Vector3 position)`.
+*   **22.3:** **3D Audio:** Update the "Listener" position to match the Player's Camera every frame.
+*   **22.4:** **Triggers:**
+    *   On `BlockBroken` event -> Play "stone_break.wav".
+    *   On `PlayerMove` -> Play "step.wav" (vary pitch slightly to sound natural).
+
+> **Prompt:** "Start Phase 22. Implement the Audio Engine using OpenAL. Create a system to load .wav files. Implement 3D spatial sound (sounds get quieter as you move away). Hook up sound effects for Footsteps and Block Breaking."
+
+---
+
+### Pro Suggestion: "Vintage" Specific Mechanics
+
+If you really want that specific *Vintage Story* feel, ask the AI for this in **Phase 17 or 20**:
+
+**The "Active Hand" System:**
+*   *Vintage Story* differentiates between Left Hand and Right Hand.
+*   **Prompt:** "Instead of a single hotbar, implement a dual-wielding system. Allow the player to hold an item in the Off-Hand. Right-click uses the Main-Hand item (Place/Eat), Left-click uses the Main-Hand action (Attack/Break). Allow specific items (like Torches) to be placed from the Off-Hand."

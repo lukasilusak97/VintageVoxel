@@ -26,6 +26,7 @@
 | 12    | Optimization (Frustum Culling) | ✅ Done   |
 | 13    | Chiseling (Micro-Blocks)       | ✅ Done   |
 | 14    | Persistence (Saving/Loading)   | ✅ Done   |
+| 15    | Game State Management (Menus)  | ✅ Done   |
 
 ---
 
@@ -97,6 +98,19 @@
     - **Left Click on chiseled block** — removes the specific sub-voxel the ray hit; if the last sub-voxel is removed the container reverts to Air and its `ChiseledBlocks` entry is cleaned up
     - **Right Click on chiseled block** — fills the adjacent sub-voxel (using `SubNormal`); if the adjacent position is outside the chiseled block, falls back to placing a Stone block in world space
   - `DebugWindow` hint line updated to display the Middle / Left / Right click chiseling controls
+- **Game State Management (Phase 15):**
+  - **`GameState` enum** (`GameState.cs`) — four named states: `MainMenu`, `Playing`, `Paused`, `Exiting`; documents the intended flow in XML comments
+  - **`_gameState` field** in `Game` — starts as `GameState.MainMenu` so the game opens on the main menu rather than jumping straight into gameplay
+  - **State-gated `OnUpdateFrame`** — physics (`Camera.PhysicsUpdate`), mouse-look, and chunk streaming are skipped unless `_gameState == Playing`; ImGui input relay always runs so menus receive input regardless of state
+  - **`TransitionToPlaying()`** — sets state to `Playing`, resets the mouse-delta first-move flag, and grabs the cursor (respects the F3 debug overlay: cursor stays free if the overlay is open)
+  - **`TransitionToPaused()`** — sets state to `Paused`, releases the cursor so the pause-menu buttons are clickable, resets first-move flag
+  - **`DrawMainMenu()`** — ImGui overlay centered on screen; "VintageVoxel" title in cyan; two buttons: **Play** (calls `TransitionToPlaying`) and **Quit** (calls `Close`)
+  - **`DrawPauseMenu()`** — ImGui overlay centered on screen; "— Paused —" title in gold; three buttons: **Resume** (`TransitionToPlaying`), **Save & Resume** (saves all chunks via `WorldPersistence.SaveAll` then transitions to Playing), **Quit** (`Close`)
+  - **ESC key** re-bound in `OnKeyDown`: `Playing → Paused` (calls `TransitionToPaused`); `Paused → Playing` (calls `TransitionToPlaying`); no-op in `MainMenu` (use the Quit button to exit)
+  - **`OnMouseDown` guard** — block interaction (break/place/chisel) is skipped unless `_gameState == Playing`, preventing accidental clicks through the menus
+  - **F3 / F / Ctrl+S** key handlers gated to `Playing` state only — debug overlay, creative-mode toggle, and manual save are unavailable from menus
+  - **Debug overlay** in `OnRenderFrame` also gated: `_debugVisible && _gameState == Playing`, so `DebugWindow.Draw` is never called from the frozen pause frame
+  - World and chunks are fully loaded before the main menu is shown; the frozen world renders as a background behind both menus giving a Minecraft-style "world preview" feel
 - **Persistence — Saving/Loading (Phase 14):**
   - **`WorldPersistence`** — new static class; handles all binary I/O for chunk data:
     - `DefaultSavePath` — `%AppData%\VintageVoxel\Saves\default`; created on demand
