@@ -18,6 +18,12 @@ public class DebugWindow
     public bool WireframeMode { get; private set; }
     public bool ShowChunkBorders { get; private set; }
     public bool NoTextures { get; private set; }
+    /// <summary>
+    /// When true the shader shows AO+light as greyscale (uNoTexture = 2).
+    /// Shows the combined effect of ambient occlusion and light levels without
+    /// texture colour, making both effects easy to inspect.
+    /// </summary>
+    public bool LightingDebug { get; private set; }
 
     // Exponential moving average for a stable FPS display.
     private float _smoothFps;
@@ -75,6 +81,10 @@ public class DebugWindow
         bool nt = NoTextures;
         ImGui.Checkbox("No Textures (White)", ref nt);
         NoTextures = nt;
+
+        bool ld = LightingDebug;
+        ImGui.Checkbox("Lighting Debug (AO+Light)", ref ld);
+        LightingDebug = ld;
 
         ImGui.Spacing();
         ImGui.TextDisabled("[F3] Toggle debug UI  [F] Toggle Creative/Survival");

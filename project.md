@@ -22,6 +22,7 @@
 | 8     | Interaction (Raycasting)     | ✅ Done     |
 | 9     | UI Dashboard & Debugging     | ✅ Done     |
 | 10    | Physics & Movement           | ✅ Done     |
+| 11    | Advanced Lighting (Flood Fill) | ✅ Done   |
 
 ---
 
@@ -81,6 +82,24 @@
   - **Creative mode** — `Camera.CreativeMode` (default `false`); when `true` restores unconstrained fly movement with WASD + E/Q vertical; velocity and `IsOnGround` are zeroed; toggled by the **F** key in `Game.OnKeyDown` (velocity reset on switch to prevent launch/halt impulse)
   - `MoveSpeed` raised to `10 u/s` for creative fly (survival walk speed is a separate constant `5 u/s`)
   - `DebugWindow.Draw` gains a `creativeMode` parameter; the dashboard now shows `Mode: Creative / Survival` and the hint line reads `[F] Toggle Creative/Survival`
+- **Advanced Lighting: Ambient Occlusion + Flood-Fill (Phase 11):**
+  - **Vertex format** extended from 5 → 7 floats per vertex: `x y z u v light ao`; stride increases from 20 → 28 bytes; `Game.UploadChunk()` registers two new vertex attributes: location 2 (light, 1 float at offset 20) and location 3 (AO, 1 float at offset 24)
+  - **`LightEngine`** — static class implementing BFS flood-fill lighting:
+    - `PropagateSunlight(world)` — full recompute pass; clears all `SunLight` arrays, column-fills sky-lit air voxels to level 15 from the top of each chunk, then runs BFS horizontally through air (level decrements by 1 per step); used at initial world load
+    - `ComputeChunk(chunk, world)` — incremental compute for a newly streamed-in chunk; seeds BFS for just that chunk and lets light bleed across chunk seams
+    - `UpdateAtBlock(wx, wy, wz, world)` — targeted recompute after a block is placed or broken; clears and reseeds the owning chunk plus the four cardinal XZ neighbours to keep seam accuracy
+    - `EmittedBlockLight()` — emission table scaffold (no blocks emit light yet; torch ID 4 → level 14 is ready to uncomment)
+  - **`Chunk`** gains two `byte[Volume]` arrays: `SunLight` and `BlockLight`; values are [0, 15]; stored separately (not bit-packed) for zero-overhead mesher access
+  - **`World.GetLight(wx, wy, wz)`** — cross-chunk light query returning `max(SunLight, BlockLight) / 15f` as a `float [0,1]`; returns 1.0 for unloaded / out-of-range positions (keeps boundary verts at full-bright until the neighbour arrives)
+  - **`ChunkMeshBuilder`** — major update:
+    - `AoNeighbors` — static `(int,int,int)[6,4,3]` 3D array encoding the 3 canonical neighbour offsets for each of the 4 vertices of each of the 6 faces; used to count solid neighbours for AO
+    - Per-vertex AO: counts solid blocks in the 3 corner positions (2 axial + 1 diagonal); maps 0/1/2/3 solids → 1.0 / 0.8 / 0.6 / 0.4 AO factor
+    - Per-vertex light: sampled at the transparent voxel directly adjacent on the face normal side via `SampleLight()` / `World.GetLight()`; defaults to 1.0 at unloaded boundaries
+    - `EmitFace()` now accepts `Chunk` and `World?`; `AddV()` takes two extra floats (`light`, `ao`)
+  - **`shader.vert`** — two new `in` attributes: `aLight` (location 2) and `aAo` (location 3); passes `vLight` and `vAo` to the fragment stage
+  - **`shader.frag`** — computes `lighting = max(0.05, vLight * vAo)` (5% minimum ambient so caves are never pitch-black); multiplies final texture colour by `lighting`; `uNoTexture = 2` activates a new **Lighting Debug** mode rendering `lighting` as greyscale
+  - **`DebugWindow`** — new `LightingDebug` bool property; new **"Lighting Debug (AO+Light)"** checkbox in the Toggles section; `Game.cs` maps the toggle to `uNoTexture = 2`
+  - **`Game.cs`** integration: `LightEngine.PropagateSunlight(_world)` called once after initial chunks are loaded; `LightEngine.ComputeChunk()` called for each arriving chunk during streaming; `LightEngine.UpdateAtBlock()` called before `RebuildAffectedChunks()` on every left-click break and right-click place
 
 ---
 
@@ -107,11 +126,12 @@ VintageVoxel/
 │   ├── BlockRegistry.cs     # Block ID → per-face atlas tile index lookup
 │   ├── Raycaster.cs         # DDA voxel raycast — Cast() returns hit block + face normal
 │   ├── ImGuiController.cs   # OpenTK 4 ImGui backend — font atlas GPU upload, inline shader, dynamic VBO, input relay
-│   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture toggles
+│   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture/lighting-debug toggles
 │   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
+│   ├── LightEngine.cs       # BFS flood-fill lighting: sunlight column-fill + horizontal spread; AO scaffold
 │   └── Shaders/
-│       ├── shader.vert      # Vertex shader — MVP transform + passes UV to fragment stage
-│       ├── shader.frag      # Fragment shader — atlas sample or solid white (uNoTexture toggle)
+│       ├── shader.vert      # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
+│       ├── shader.frag      # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
 │       ├── line.vert        # Minimal vertex shader for chunk border lines (position only)
 │       └── line.frag        # Solid-colour fragment shader for debug lines (uColor uniform)
 └── roadmap.md               # Full 8-phase build plan

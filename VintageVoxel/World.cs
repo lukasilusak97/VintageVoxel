@@ -126,6 +126,31 @@ public class World
     }
 
     // -------------------------------------------------------------------------
+    // Light query (used by ChunkMeshBuilder for cross-chunk light sampling)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns the combined light level [0,1] at the given world coordinate.
+    /// Returns 1.0 for out-of-range or unloaded positions (full-bright at boundaries).
+    /// </summary>
+    public float GetLight(int worldX, int worldY, int worldZ)
+    {
+        if ((uint)worldY >= (uint)Chunk.Size)
+            return 1.0f;
+
+        int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
+
+        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk))
+            return 1.0f;
+
+        int lx = worldX - cx * Chunk.Size;
+        int lz = worldZ - cz * Chunk.Size;
+        int idx = Chunk.Index(lx, worldY, lz);
+        return Math.Max(chunk.SunLight[idx], chunk.BlockLight[idx]) / 15f;
+    }
+
+    // -------------------------------------------------------------------------
     // Block mutation (used by interaction / raycasting)
     // -------------------------------------------------------------------------
 

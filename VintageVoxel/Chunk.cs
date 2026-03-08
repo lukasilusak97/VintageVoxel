@@ -23,6 +23,14 @@ public class Chunk
 
     private readonly Block[] _blocks = new Block[Volume];
 
+    // Light levels stored per-voxel, range [0, 15].
+    // SunLight  — propagated downward from the sky (max 15) then BFS-spread horizontally.
+    // BlockLight — emitted by torches / light-source blocks (max 14 in current design).
+    // Stored as separate byte arrays (1 byte = 8-bit, only 4 bits used) so the mesher
+    // can sample them without any bitpacking overhead.
+    public readonly byte[] SunLight = new byte[Volume];
+    public readonly byte[] BlockLight = new byte[Volume];
+
     public Chunk(OpenTK.Mathematics.Vector3i position)
     {
         Position = position;
@@ -92,5 +100,5 @@ public class Chunk
     // ------------------------------------------------------------------
 
     /// <summary>Converts local (x, y, z) to a flat array index.</summary>
-    private static int Index(int x, int y, int z) => x + Size * (y + Size * z);
+    public static int Index(int x, int y, int z) => x + Size * (y + Size * z);
 }

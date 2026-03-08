@@ -77,6 +77,9 @@ public class Game : GameWindow
         // -----------------------------------------------------------------------
         _world = new World();
         _world.Update(_camera.Position, out var initial, out _);
+        // Compute lighting for all initially loaded chunks before uploading geometry.
+        // All chunks are in the dictionary so cross-chunk BFS works correctly.
+        LightEngine.PropagateSunlight(_world);
         foreach (var key in initial)
             _chunkGpuData[key] = UploadChunk(_world.Chunks[key]);
 
@@ -118,14 +121,22 @@ public class Game : GameWindow
                       mesh.Indices,
                       BufferUsageHint.StaticDraw);
 
-        // Vertex layout: 5 floats per vertex (xyz position + uv texcoord), stride = 20 bytes.
+        // Vertex layout: 7 floats per vertex (xyz position + uv texcoord + light + ao), stride = 28 bytes.
         // Location 0 — position (3 floats, byte offset 0).
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 5 * sizeof(float), 0);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), 0);
         GL.EnableVertexAttribArray(0);
 
         // Location 1 — UV texcoord (2 floats, byte offset 12).
-        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 5 * sizeof(float), 3 * sizeof(float));
+        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 7 * sizeof(float), 3 * sizeof(float));
         GL.EnableVertexAttribArray(1);
+
+        // Location 2 — light level (1 float, byte offset 20).
+        GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 5 * sizeof(float));
+        GL.EnableVertexAttribArray(2);
+
+        // Location 3 — ambient occlusion (1 float, byte offset 24).
+        GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 6 * sizeof(float));
+        GL.EnableVertexAttribArray(3);
 
         GL.BindVertexArray(0);
         return new ChunkGpu(vao, vbo, ebo, mesh.Indices.Length);
@@ -228,6 +239,14 @@ public class Game : GameWindow
 
         if (added.Count > 0)
         {
+            // Compute lighting for the new chunks plus their immediate neighbours
+            // (seam-accurate BFS needs the neighbour data available first).
+            foreach (var key in added)
+            {
+                if (_world.Chunks.TryGetValue(key, out var newChunk))
+                    LightEngine.ComputeChunk(newChunk, _world);
+            }
+
             // Include the four cardinal neighbours of each new chunk so their
             // boundary faces (previously exposed toward the empty slot) get re-culled.
             var toRebuild = new HashSet<Vector2i>(added);
@@ -265,7 +284,9 @@ public class Game : GameWindow
         // Bind the atlas to texture unit 0 and tell the shader which unit to sample.
         _atlas.Use(TextureUnit.Texture0);
         _shader.SetInt("uTexture", 0);
-        _shader.SetInt("uNoTexture", _debugWindow.NoTextures ? 1 : 0);
+        // uNoTexture: 0 = textured, 1 = white (no texture), 2 = AO+light greyscale debug
+        int noTexMode = _debugWindow.LightingDebug ? 2 : (_debugWindow.NoTextures ? 1 : 0);
+        _shader.SetInt("uNoTexture", noTexMode);
 
         var view = _camera.GetViewMatrix();
         var projection = _camera.GetProjectionMatrix();
@@ -338,6 +359,7 @@ public class Game : GameWindow
             if (hit.Hit)
             {
                 _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
+                LightEngine.UpdateAtBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
                 RebuildAffectedChunks(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
             }
         }
@@ -350,6 +372,7 @@ public class Game : GameWindow
                 var place = hit.BlockPos + hit.Normal;
                 _world.SetBlock(place.X, place.Y, place.Z,
                     new Block { Id = 2, IsTransparent = false }); // Stone
+                LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
                 RebuildAffectedChunks(place.X, place.Y, place.Z);
             }
         }
