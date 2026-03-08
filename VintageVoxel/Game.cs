@@ -181,7 +181,7 @@ public class Game : GameWindow
         }
 
         float dt = (float)args.Time;
-        _camera.ProcessKeyboard(KeyboardState, dt);
+        _camera.PhysicsUpdate(_world, KeyboardState, dt);
 
         // Mouse look: only active when cursor is grabbed (debug overlay closed).
         if (CursorState == CursorState.Grabbed)
@@ -316,7 +316,8 @@ public class Game : GameWindow
                 fps: (float)(1.0 / args.Time),
                 frameTimeMs: (float)(args.Time * 1000.0),
                 playerPos: _camera.Position,
-                chunksLoaded: _chunkGpuData.Count);
+                chunksLoaded: _chunkGpuData.Count,
+                creativeMode: _camera.CreativeMode);
         }
         _imgui.Render(); // Render the ImGui frame (empty if overlay is hidden).
 
@@ -365,6 +366,14 @@ public class Game : GameWindow
         {
             _debugVisible = !_debugVisible;
             CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
+        }
+
+        // F — toggle Creative / Survival mode (Phase 10).
+        if (e.Key == Keys.F)
+        {
+            _camera.CreativeMode = !_camera.CreativeMode;
+            // Reset vertical velocity so there is no launch impulse on switch.
+            _camera.Velocity = Vector3.Zero;
         }
     }
 

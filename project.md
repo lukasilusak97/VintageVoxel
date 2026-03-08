@@ -21,6 +21,7 @@
 | 7     | Infinite World Generation    | ✅ Done     |
 | 8     | Interaction (Raycasting)     | ✅ Done     |
 | 9     | UI Dashboard & Debugging     | ✅ Done     |
+| 10    | Physics & Movement           | ✅ Done     |
 
 ---
 
@@ -71,6 +72,15 @@
       - **No Textures (White)** — sets the `uNoTexture` uniform on `shader.frag`; when non-zero the fragment shader returns `vec4(1.0)` (solid white) instead of sampling the atlas
   - `ChunkBorderRenderer` — owns a separate `line.vert`/`line.frag` shader pair and a single VBO; `UpdateGeometry()` iterates all loaded chunk keys and emits 24 line-endpoint vertices (3 floats each) per chunk; `Render()` binds the shader, uploads view/projection, and issues a single `GL.DrawArrays(Lines)` call
   - `shader.frag` updated with `uniform int uNoTexture` toggle — backward compatible (defaults to 0 = textured) so all prior rendering is unchanged
+- **Physics & Movement (Phase 10):**
+  - `Camera.PhysicsUpdate(world, keyboard, dt)` — unified physics tick called from `Game.OnUpdateFrame`; completely replaces the old `ProcessKeyboard`
+  - **Survival mode** (default): gravity (`−25 world units/s²`) accumulates in `Velocity.Y`; horizontal velocity (`5 u/s`) is set directly from WASD input every frame (no sliding momentum); **Space** jumps with an initial upward velocity of `8 u/s`; `Velocity.Y` is clamped at `−60 u/s` terminal velocity
+  - **AABB collision** — player body is a `0.6 × 1.8 × 0.6` axis-aligned box; `IsCollidingAt(world, eyePos)` queries `World.GetBlock()` for every integer cell the box overlaps; the region below world Y = 0 is treated as solid bedrock
+  - **Per-axis sliding resolution** — movement is resolved independently for X, then Y, then Z; if a collision is detected on one axis the position is reverted and that axis's velocity is zeroed, while the other two axes continue unaffected — this is what gives smooth wall-sliding with no sticking
+  - **Ground probe** — after resolving all axes a 5 cm downward sample of `IsCollidingAt` determines `IsOnGround`; jumping is only allowed when `IsOnGround` is true
+  - **Creative mode** — `Camera.CreativeMode` (default `false`); when `true` restores unconstrained fly movement with WASD + E/Q vertical; velocity and `IsOnGround` are zeroed; toggled by the **F** key in `Game.OnKeyDown` (velocity reset on switch to prevent launch/halt impulse)
+  - `MoveSpeed` raised to `10 u/s` for creative fly (survival walk speed is a separate constant `5 u/s`)
+  - `DebugWindow.Draw` gains a `creativeMode` parameter; the dashboard now shows `Mode: Creative / Survival` and the hint line reads `[F] Toggle Creative/Survival`
 
 ---
 
@@ -97,7 +107,7 @@ VintageVoxel/
 │   ├── BlockRegistry.cs     # Block ID → per-face atlas tile index lookup
 │   ├── Raycaster.cs         # DDA voxel raycast — Cast() returns hit block + face normal
 │   ├── ImGuiController.cs   # OpenTK 4 ImGui backend — font atlas GPU upload, inline shader, dynamic VBO, input relay
-│   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + wireframe/borders/no-texture toggles
+│   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture toggles
 │   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
 │   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV to fragment stage

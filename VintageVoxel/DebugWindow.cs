@@ -31,7 +31,8 @@ public class DebugWindow
     /// <param name="frameTimeMs">Raw frame time in milliseconds.</param>
     /// <param name="playerPos">Current camera / player world position.</param>
     /// <param name="chunksLoaded">Number of chunks currently in GPU memory.</param>
-    public void Draw(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded)
+    /// <param name="creativeMode">Whether creative / fly mode is active.</param>
+    public void Draw(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode)
     {
         // Smooth FPS to stop the number flickering.
         _smoothFps = _smoothFps < 1f
@@ -55,6 +56,7 @@ public class DebugWindow
         ImGui.Text($"Frame Time : {frameTimeMs,6:F2} ms");
         ImGui.Text($"Pos        : {playerPos.X,7:F1}, {playerPos.Y,6:F1}, {playerPos.Z,7:F1}");
         ImGui.Text($"Chunks     : {chunksLoaded}");
+        ImGui.Text($"Mode       : {(creativeMode ? "Creative" : "Survival")}");
 
         ImGui.Spacing();
 
@@ -75,7 +77,7 @@ public class DebugWindow
         NoTextures = nt;
 
         ImGui.Spacing();
-        ImGui.TextDisabled("[F3] Toggle debug UI  [F3 to hide]");
+        ImGui.TextDisabled("[F3] Toggle debug UI  [F] Toggle Creative/Survival");
 
         ImGui.End();
     }
