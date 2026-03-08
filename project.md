@@ -23,6 +23,7 @@
 | 9     | UI Dashboard & Debugging     | ✅ Done     |
 | 10    | Physics & Movement           | ✅ Done     |
 | 11    | Advanced Lighting (Flood Fill) | ✅ Done   |
+| 12    | Optimization (Frustum Culling) | ✅ Done   |
 
 ---
 
@@ -73,6 +74,13 @@
       - **No Textures (White)** — sets the `uNoTexture` uniform on `shader.frag`; when non-zero the fragment shader returns `vec4(1.0)` (solid white) instead of sampling the atlas
   - `ChunkBorderRenderer` — owns a separate `line.vert`/`line.frag` shader pair and a single VBO; `UpdateGeometry()` iterates all loaded chunk keys and emits 24 line-endpoint vertices (3 floats each) per chunk; `Render()` binds the shader, uploads view/projection, and issues a single `GL.DrawArrays(Lines)` call
   - `shader.frag` updated with `uniform int uNoTexture` toggle — backward compatible (defaults to 0 = textured) so all prior rendering is unchanged
+- **View Frustum Culling (Phase 12):**
+  - `Frustum` struct (`Frustum.cs`) — extracts 6 clipping planes from the combined view-projection matrix using the Gribb-Hartmann method; planes are stored as normalised `Vector4` (a, b, c, d) with convention a·x + b·y + c·z + d ≥ 0 for inside
+  - Because OpenTK sends matrices with `transpose=false` (row-major storage reinterpreted as column-major by OpenGL), the effective clip transform is `Transpose(view × projection) × worldPos`; plane extraction runs on `Matrix4.Transpose(view * projection)` so the planes sit correctly in world space
+  - `Frustum.ContainsAabb(min, max)` — AABB vs. frustum test using the **positive-vertex optimisation**: for each of the 6 planes, only the single corner most aligned with the plane normal is tested; if that corner is outside the plane the entire box is outside → O(1) per chunk instead of 8 corner tests
+  - `Frustum.FromViewProjection(view, projection)` — factory method takes the already-computed matrices to avoid redundant matrix construction
+  - `Game.OnRenderFrame` — builds the frustum once per frame (after computing `view`/`projection` for the shader uniforms); each chunk's world-space AABB `[cx×32 .. (cx+1)×32] × [0..32] × [cz×32 .. (cz+1)×32]` is tested before issuing any draw call; chunks behind/beside the camera are skipped with zero GPU cost
+  - Chunks are still fully loaded and meshed regardless of visibility; frustum culling is a draw-call filter only, so streaming, lighting, and interaction logic are unaffected
 - **Physics & Movement (Phase 10):**
   - `Camera.PhysicsUpdate(world, keyboard, dt)` — unified physics tick called from `Game.OnUpdateFrame`; completely replaces the old `ProcessKeyboard`
   - **Survival mode** (default): gravity (`−25 world units/s²`) accumulates in `Velocity.Y`; horizontal velocity (`5 u/s`) is set directly from WASD input every frame (no sliding momentum); **Space** jumps with an initial upward velocity of `8 u/s`; `Velocity.Y` is clamped at `−60 u/s` terminal velocity

@@ -295,12 +295,27 @@ public class Game : GameWindow
         _shader.SetMatrix4("view", ref view);
         _shader.SetMatrix4("projection", ref projection);
 
+        // Build the view frustum once per frame.  Any chunk whose axis-aligned
+        // bounding box is entirely outside the frustum is skipped — no draw call,
+        // no vertex shader invocations, no wasted GPU time.
+        var frustum = Frustum.FromViewProjection(view, projection);
+
         // Draw each loaded chunk with its own world-space translation matrix.
         foreach (var (key, gpu) in _chunkGpuData)
         {
             if (gpu.IndexCount == 0) continue; // All-air chunk — nothing to submit.
 
             if (!_world.Chunks.TryGetValue(key, out var chunk)) continue;
+
+            // --- Phase 12: Frustum Culling ---
+            // Each chunk occupies a Chunk.Size³ AABB.  Test it against the six
+            // frustum planes before issuing the draw call.
+            int wx = chunk.Position.X * Chunk.Size;
+            int wz = chunk.Position.Z * Chunk.Size;
+            if (!frustum.ContainsAabb(
+                    new Vector3(wx, 0f, wz),
+                    new Vector3(wx + Chunk.Size, Chunk.Size, wz + Chunk.Size)))
+                continue;
 
             var model = Matrix4.CreateTranslation(
                 chunk.Position.X * Chunk.Size,
