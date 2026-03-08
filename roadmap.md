@@ -158,15 +158,7 @@
 
 > **Prompt:** "Start Phase 13. Create a 'Chiseled Block' system. If a block is marked as 'Chiseled', it should contain a 16x16x16 boolean array. Update the MeshBuilder to render these mini-voxels efficiently."
 
-## Phase 14: "Vintage" Atmosphere: Temporal Stability
-**Goal:** Horror elements.
-*   **14.1:** Create a `Stability` float (0.0 to 1.0).
-*   **14.2:** **Shader Waving:** Update Vertex Shader. If Stability is low, apply a `sin(time)` offset to vertex positions to make the world "breathe" or warp.
-*   **14.3:** **Desaturation:** Update Fragment Shader to turn the screen grey/sepia as stability drops.
-
-> **Prompt:** "Start Phase 14. Implement atmospheric shaders. Pass a 'Stability' uniform to the shaders. When stability is low, warp the vertex positions using Sine waves and desaturate the colors in the fragment shader."
-
-## Phase 15: Persistence (Saving/Loading)
+## Phase 14: Persistence (Saving/Loading)
 **Goal:** Saving the world.
 *   **15.1:** Binary Serialization using `BinaryWriter`.
 *   **15.2:** **RLE Compression:** Compress block ID arrays.

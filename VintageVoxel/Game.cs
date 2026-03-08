@@ -22,6 +22,15 @@ public class Game : GameWindow
     private World _world = null!;
     private Texture _atlas = null!;
 
+    // --- Phase 9: ImGui debug dashboard ---
+    private ImGuiController _imgui = null!;
+    private DebugWindow _debugWindow = null!;
+    private ChunkBorderRenderer _borders = null!;
+    // Whether the debug overlay is currently open (F3 toggles).
+    private bool _debugVisible = false;
+    // Set to true when the chunk set changes so border geometry is rebuilt.
+    private bool _bordersDirty = true;
+
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -70,6 +79,14 @@ public class Game : GameWindow
         _world.Update(_camera.Position, out var initial, out _);
         foreach (var key in initial)
             _chunkGpuData[key] = UploadChunk(_world.Chunks[key]);
+
+        // -----------------------------------------------------------------------
+        // Phase 9: Initialise ImGui backend, debug window and border renderer.
+        // ImGuiController must be created after the GL context exists (OnLoad).
+        // -----------------------------------------------------------------------
+        _imgui = new ImGuiController(Size.X, Size.Y);
+        _debugWindow = new DebugWindow();
+        _borders = new ChunkBorderRenderer();
     }
 
     // -------------------------------------------------------------------------
@@ -166,20 +183,31 @@ public class Game : GameWindow
         float dt = (float)args.Time;
         _camera.ProcessKeyboard(KeyboardState, dt);
 
-        // Mouse look: compute the delta from last frame's position.
-        // On first frame, snap without a jump.
-        var mouse = MouseState;
-        if (_firstMove)
+        // Mouse look: only active when cursor is grabbed (debug overlay closed).
+        if (CursorState == CursorState.Grabbed)
         {
-            _lastMousePos = new Vector2(mouse.X, mouse.Y);
-            _firstMove = false;
+            var mouse = MouseState;
+            if (_firstMove)
+            {
+                _lastMousePos = new Vector2(mouse.X, mouse.Y);
+                _firstMove = false;
+            }
+            else
+            {
+                var delta = new Vector2(mouse.X - _lastMousePos.X, mouse.Y - _lastMousePos.Y);
+                _lastMousePos = new Vector2(mouse.X, mouse.Y);
+                _camera.ProcessMouseMovement(delta);
+            }
         }
         else
         {
-            var delta = new Vector2(mouse.X - _lastMousePos.X, mouse.Y - _lastMousePos.Y);
-            _lastMousePos = new Vector2(mouse.X, mouse.Y);
-            _camera.ProcessMouseMovement(delta);
+            // Reset so there is no jump when cursor is re-grabbed.
+            _firstMove = true;
         }
+
+        // Feed input into ImGui every frame (keeps its state consistent whether
+        // the overlay is visible or not).
+        _imgui.Update(this, dt);
 
         // -----------------------------------------------------------------------
         // Chunk streaming: load chunks entering the render radius, unload those
@@ -196,6 +224,7 @@ public class Game : GameWindow
                 _chunkGpuData.Remove(key);
             }
         }
+        if (removed.Count > 0) _bordersDirty = true;
 
         if (added.Count > 0)
         {
@@ -217,6 +246,7 @@ public class Game : GameWindow
                     DeleteChunkGpu(old);
                 _chunkGpuData[key] = UploadChunk(chunk);
             }
+            _bordersDirty = true;
         }
     }
 
@@ -226,16 +256,17 @@ public class Game : GameWindow
 
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
+        // --- Apply debug render-mode toggles ---
+        if (_debugWindow.WireframeMode)
+            GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
+
         _shader.Use();
 
         // Bind the atlas to texture unit 0 and tell the shader which unit to sample.
-        // TextureUnit.Texture0 activates slot 0; the uniform value 0 matches that slot.
         _atlas.Use(TextureUnit.Texture0);
         _shader.SetInt("uTexture", 0);
+        _shader.SetInt("uNoTexture", _debugWindow.NoTextures ? 1 : 0);
 
-        // Build the Model matrix: the chunk's local block coordinates are directly in
-        // world-space since chunk Position is (0,0,0).  In Phase 7 this becomes a
-        // per-chunk translation: Matrix4.CreateTranslation(chunk.Position * Chunk.Size).
         var view = _camera.GetViewMatrix();
         var projection = _camera.GetProjectionMatrix();
 
@@ -250,7 +281,6 @@ public class Game : GameWindow
 
             if (!_world.Chunks.TryGetValue(key, out var chunk)) continue;
 
-            // Translate the mesh (local coords 0..31) to the chunk's world position.
             var model = Matrix4.CreateTranslation(
                 chunk.Position.X * Chunk.Size,
                 0f,
@@ -262,6 +292,34 @@ public class Game : GameWindow
         }
 
         GL.BindVertexArray(0);
+
+        // Restore fill mode before drawing debug overlays and ImGui.
+        if (_debugWindow.WireframeMode)
+            GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+
+        // --- Chunk border overlay ---
+        if (_debugWindow.ShowChunkBorders)
+        {
+            // Lazily rebuild border geometry when the chunk set changes.
+            if (_bordersDirty)
+            {
+                _borders.UpdateGeometry(_chunkGpuData.Keys);
+                _bordersDirty = false;
+            }
+            _borders.Render(ref view, ref projection);
+        }
+
+        // --- ImGui debug dashboard ---
+        if (_debugVisible)
+        {
+            _debugWindow.Draw(
+                fps: (float)(1.0 / args.Time),
+                frameTimeMs: (float)(args.Time * 1000.0),
+                playerPos: _camera.Position,
+                chunksLoaded: _chunkGpuData.Count);
+        }
+        _imgui.Render(); // Render the ImGui frame (empty if overlay is hidden).
+
         SwapBuffers();
     }
 
@@ -296,12 +354,33 @@ public class Game : GameWindow
         }
     }
 
+    protected override void OnKeyDown(KeyboardKeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+
+        // F3 — toggle the debug overlay.
+        // When visible: release cursor so ImGui checkboxes are interactive.
+        // When hidden:  grab cursor so the FPS camera works again.
+        if (e.Key == Keys.F3)
+        {
+            _debugVisible = !_debugVisible;
+            CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
+        }
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        base.OnTextInput(e);
+        // Forward typed characters to ImGui so text fields work correctly.
+        _imgui?.PressChar((uint)e.Unicode);
+    }
+
     protected override void OnResize(ResizeEventArgs e)
     {
         base.OnResize(e);
         GL.Viewport(0, 0, e.Width, e.Height);
-        // Keep the projection aspect ratio in sync with the window.
         _camera?.SetAspectRatio(e.Width / (float)e.Height);
+        _imgui?.WindowResized(e.Width, e.Height);
     }
 
     protected override void OnUnload()
@@ -315,5 +394,7 @@ public class Game : GameWindow
 
         _atlas.Dispose();
         _shader.Dispose();
+        _borders.Dispose();
+        _imgui.Dispose();
     }
 }

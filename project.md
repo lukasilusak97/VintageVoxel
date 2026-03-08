@@ -20,6 +20,7 @@
 | 6     | Texturing (Texture Atlas)    | ✅ Done     |
 | 7     | Infinite World Generation    | ✅ Done     |
 | 8     | Interaction (Raycasting)     | ✅ Done     |
+| 9     | UI Dashboard & Debugging     | ✅ Done     |
 
 ---
 
@@ -57,6 +58,19 @@
   - `World.SetBlock(worldX, worldY, worldZ, block)` — mutates a block in-place via the existing `ref Block GetBlock()` handle; returns false for out-of-range / unloaded positions
   - `Camera.Front` — exposes the normalised look direction to the raycaster
   - `Game.RebuildChunk(key)` / `Game.RebuildAffectedChunks(wx, wy, wz)` — re-meshes the owning chunk plus the four cardinal neighbours when the modified block is on a chunk boundary, keeping seam culling correct after edits
+- **ImGui developer dashboard (Phase 9):**
+  - `ImGui.NET 1.89.7.1` integrated via a custom `ImGuiController` OpenTK-4 backend: font atlas uploaded to GPU, inline GLSL shader compiled at runtime, dynamic VAO/VBO/EBO for per-frame draw lists; input relayed from OpenTK `MouseState`/`KeyboardState` each frame
+  - **`F3`** toggles the debug overlay on/off; cursor is released (Normal) when the overlay is open so checkboxes are interactive, and re-grabbed when hidden for FPS camera operation
+  - `DebugWindow` — ImGui window pinned to the top-left corner showing:
+    - **FPS** (exponential moving-average smoothed) and **Frame Time** (ms)
+    - **Player Position** (X / Y / Z) updated live every frame
+    - **Chunks Loaded** count
+    - Three interactive checkboxes:
+      - **Wireframe Mode** — `GL.PolygonMode(Line/Fill)` toggled before/after the chunk draw loop; ImGui always renders in fill mode regardless
+      - **Show Chunk Borders** — `ChunkBorderRenderer` draws 12 red GL_LINES edges around each loaded chunk AABB (depth test disabled so borders are always visible); geometry lazily rebuilt into a dynamic VBO whenever the chunk set changes
+      - **No Textures (White)** — sets the `uNoTexture` uniform on `shader.frag`; when non-zero the fragment shader returns `vec4(1.0)` (solid white) instead of sampling the atlas
+  - `ChunkBorderRenderer` — owns a separate `line.vert`/`line.frag` shader pair and a single VBO; `UpdateGeometry()` iterates all loaded chunk keys and emits 24 line-endpoint vertices (3 floats each) per chunk; `Render()` binds the shader, uploads view/projection, and issues a single `GL.DrawArrays(Lines)` call
+  - `shader.frag` updated with `uniform int uNoTexture` toggle — backward compatible (defaults to 0 = textured) so all prior rendering is unchanged
 
 ---
 
@@ -82,9 +96,14 @@ VintageVoxel/
 │   ├── TextureAtlas.cs      # Procedural 48x16 atlas (Dirt / Stone / Grass tiles)
 │   ├── BlockRegistry.cs     # Block ID → per-face atlas tile index lookup
 │   ├── Raycaster.cs         # DDA voxel raycast — Cast() returns hit block + face normal
+│   ├── ImGuiController.cs   # OpenTK 4 ImGui backend — font atlas GPU upload, inline shader, dynamic VBO, input relay
+│   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + wireframe/borders/no-texture toggles
+│   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
 │   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV to fragment stage
-│       └── shader.frag      # Fragment shader — samples uTexture atlas at vTexCoord
+│       ├── shader.frag      # Fragment shader — atlas sample or solid white (uNoTexture toggle)
+│       ├── line.vert        # Minimal vertex shader for chunk border lines (position only)
+│       └── line.frag        # Solid-colour fragment shader for debug lines (uColor uniform)
 └── roadmap.md               # Full 8-phase build plan
 ```
 
@@ -94,3 +113,5 @@ VintageVoxel/
 - GLSL files must be **ASCII only** — NVIDIA's driver rejects non-ASCII bytes even inside comments.
 - Shader files are copied to the output directory via `<None Update="Shaders\**"><CopyToOutputDirectory>PreserveNewest` in the `.csproj`.
 - Back-face culling uses CCW winding order (OpenGL default).
+- `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` is enabled in the `.csproj` — required by `ImGuiController` to dereference the `ImDrawList**` native pointer (`data.CmdLists` returns `nint` in ImGui.NET 1.89.7.1).
+- **F3** toggles the ImGui debug overlay; cursor must be in Normal mode for checkbox interaction so F3 also toggles `CursorState` between `Normal` and `Grabbed`.

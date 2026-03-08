@@ -7,12 +7,16 @@ in vec2 vTexCoord;
 out vec4 FragColor;
 
 // The texture atlas bound to texture unit 0.
-// sampler2D lets the GPU sample (read) texels from the bound 2D texture.
 uniform sampler2D uTexture;
+
+// Debug toggle: when non-zero, skip atlas sampling and output solid white.
+// Useful for verifying mesh geometry and lighting without texture noise.
+uniform int uNoTexture;
 
 void main()
 {
-    // texture() samples the atlas at the interpolated UV coordinate.
-    // The hardware filters between mipmap levels automatically.
-    FragColor = texture(uTexture, vTexCoord);
+    if (uNoTexture != 0)
+        FragColor = vec4(1.0);
+    else
+        FragColor = texture(uTexture, vTexCoord);
 }

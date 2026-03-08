@@ -5,10 +5,12 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="OpenTK" Version="4.9.3" />
+    <PackageReference Include="ImGui.NET" Version="1.89.7.1" />
   </ItemGroup>
 
   <!-- Copy GLSL shader files to the output directory so they're found at runtime
