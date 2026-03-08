@@ -29,10 +29,6 @@
 | 15    | Game State Management (Menus)  | ✅ Done   |
 | 16    | Inventory Architecture         | ✅ Done   |
 | 17    | HUD (Heads-Up Display)         | ✅ Done   |
-| E1    | Asset Editor: Architecture & ImGui Layout | ✅ Done |
-| E2    | Asset Editor: Microblock Canvas (3D Voxel Editing) | 🔲 Todo |
-| E3    | Asset Editor: 2D Texture Painting | 🔲 Todo |
-| E4    | Asset Editor: JSON Model Exporter  | 🔲 Todo |
 
 ---
 
@@ -188,31 +184,18 @@
   - **`shader.frag`** — computes `lighting = max(0.05, vLight * vAo)` (5% minimum ambient so caves are never pitch-black); multiplies final texture colour by `lighting`; `uNoTexture = 2` activates a new **Lighting Debug** mode rendering `lighting` as greyscale
   - **`DebugWindow`** — new `LightingDebug` bool property; new **"Lighting Debug (AO+Light)"** checkbox in the Toggles section; `Game.cs` maps the toggle to `uNoTexture = 2`
   - **`Game.cs`** integration: `LightEngine.PropagateSunlight(_world)` called once after initial chunks are loaded; `LightEngine.ComputeChunk()` called for each arriving chunk during streaming; `LightEngine.UpdateAtBlock()` called before `RebuildAffectedChunks()` on every left-click break and right-click place
-- **Asset Editor Architecture (Phase E1):**
-  - **Solution restructured into three projects** inside `VintageVoxel.sln`:
-    - **`EngineCore` (Class Library)** — all shared engine infrastructure: `Shader`, `Texture`, `TextureAtlas`, `BlockRegistry`, `Frustum`, `NoiseGenerator`, `ImGuiController`, `Camera`, `Block`, `ChiseledBlockData`, `Chunk`, `ChunkMeshBuilder`, `World`, `WorldPersistence`, `LightEngine`, `Raycaster`; NuGet: OpenTK 4.9.3 + ImGui.NET 1.89.7.1
-    - **`VintageVoxel` / GameClient (Executable)** — game-specific application code: `Game`, `Program`, `GameState`, `DebugWindow`, `ChunkBorderRenderer`, `HUDRenderer`, `Inventory`, `Item`, `ItemStack`; references `EngineCore`
-    - **`AssetEditor` (Executable)** — skeleton asset editor window; references `EngineCore`
-  - **`World.ReplaceChunk`** visibility raised from `internal` → `public` so GameClient can hot-swap loaded chunks across assembly boundaries
-  - **`EditorWindow`** (`AssetEditor/EditorWindow.cs`) — Phase E1 complete: 1280×720 window, dark background, `ImGuiController` from EngineCore; three-panel ImGui layout (200-px left toolbar, 220-px right properties panel, centre 3D viewport label)
-  - **`OrbitCamera`** (`EngineCore/OrbitCamera.cs`) — spherical orbit camera; stores `Azimuth`, `Elevation`, `Radius` in spherical coordinates around a world-space `Target` (default = origin); produces `GetViewMatrix()` / `GetProjectionMatrix()`; `Orbit(dAzimuth, dElevation)` and `Zoom(delta)` helpers called from mouse events; `UpdateAspect(float)` called on window resize
-  - **3D viewport** — `EditorWindow` renders a live 3D scene before the ImGui pass: orbit camera driven by RMB-drag (azimuth + elevation) and scroll-wheel (zoom); `editor.vert` / `editor.frag` GLSL pair (AssetEditor/Shaders/) — minimal position-only vertex shader + per-draw `uColor` flat-colour fragment shader; XYZ axis lines (X=red, Y=green, Z=blue, 2.5 units each) + flat reference grid on XZ plane (−8 to +8, 1-unit spacing, dim grey); left toolbar shows orbit-camera control hints
-  - **JSON export format** (`EngineCore/VoxelModel.cs`) — `VoxelModel` (name, type, gridSize, voxels[]) + `VoxelEntry` (x, y, z, color hex); `System.Text.Json` serialisation; matches the `asset_editor.md` §2 spec exactly; shared by both the Editor and the GameClient
-  - **`AssetExporter`** (`AssetEditor/AssetExporter.cs`) — `Export(model, dir)` saves formatted JSON to any folder; `ExportToSharedData(model)` convenience overload writes to `SharedData/Models/` beside the solution root; Export button + Model Name field wired into the right properties panel
-  - **`ModelLoader`** (`EngineCore/ModelLoader.cs`) — `Load(path)` deserialises a `.json` file into `VoxelModel` (case-insensitive); `TryLoad(path, out model)` non-throwing variant; ready to use from the GameClient to ingest exported assets
-
 ---
 
 ## Project Structure
 
 ```
 VintageVoxel/                    ← Solution root
-├── VintageVoxel.sln             # Three-project solution
+├── VintageVoxel.sln             # Two-project solution
 ├── .vscode/
 │   ├── launch.json              # F5 run/debug configurations
 │   └── tasks.json               # Default build task (Ctrl+Shift+B)
 │
-├── EngineCore/                  ← Shared Class Library (referenced by GameClient + AssetEditor)
+├── EngineCore/                  ← Shared Class Library (referenced by GameClient)
 │   ├── EngineCore.csproj        # Class Library; OpenTK 4.9.3 + ImGui.NET
 │   ├── Shader.cs                # Compiles GLSL, links program, uniform setters
 │   ├── Texture.cs               # GL texture wrapper — uploads RGBA bytes, nearest filter
@@ -229,38 +212,26 @@ VintageVoxel/                    ← Solution root
 │   ├── World.cs                 # Chunk dictionary (Vector2i → Chunk); Update() streams load/unload; GetBlock/GetLight cross-chunk queries
 │   ├── WorldPersistence.cs      # Binary save/load: per-chunk .bin files with RLE compression
 │   ├── LightEngine.cs           # BFS flood-fill lighting: PropagateSunlight, ComputeChunk, UpdateAtBlock
-│   ├── Raycaster.cs             # DDA voxel raycast — Cast() + CastSubVoxel() for chiseled blocks
-│   ├── OrbitCamera.cs           # Spherical orbit camera (azimuth/elevation/radius); Orbit() + Zoom() helpers
-│   ├── VoxelModel.cs            # JSON data model: VoxelModel + VoxelEntry; matches asset_editor.md §2 spec
-│   └── ModelLoader.cs           # Deserialises .json → VoxelModel; Load() + TryLoad()
+│   └── Raycaster.cs             # DDA voxel raycast — Cast() + CastSubVoxel() for chiseled blocks
 │
-├── VintageVoxel/                ← GameClient Executable (references EngineCore)
-│   ├── VintageVoxel.csproj      # Exe; references EngineCore.csproj
-│   ├── Program.cs               # Entry point — configures and runs the Game window
-│   ├── Game.cs                  # GameWindow subclass — game loop, VAO/VBO/EBO, render
-│   ├── GameState.cs             # GameState enum: MainMenu, Playing, Paused, Exiting
-│   ├── DebugWindow.cs           # ImGui overlay: FPS/pos/chunk metrics + mode + toggles
-│   ├── ChunkBorderRenderer.cs   # GL_LINES AABB wireframe per chunk (line.vert/frag)
-│   ├── HUDRenderer.cs           # 2-D orthographic HUD: crosshair + hotbar slots + item icons
-│   ├── Item.cs                  # Item class: Id, Name, MaxStackSize, TextureId; Dirt/Stone/Grass singletons
-│   ├── ItemStack.cs             # ItemStack struct: Item? + Count; IsEmpty; Empty sentinel
-│   ├── Inventory.cs             # 10-slot hotbar inventory; ScrollHotbar(); AddItem/RemoveItem/HasItem; HeldStack ref
-│   └── Shaders/
-│       ├── shader.vert          # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
-│       ├── shader.frag          # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
-│       ├── line.vert            # Minimal vertex shader for chunk border lines (position only)
-│       ├── line.frag            # Solid-colour fragment shader for debug lines (uColor uniform)
-│       ├── hud.vert             # 2-D HUD vertex shader — orthographic pixel-space projection
-│       └── hud.frag             # 2-D HUD fragment shader — flat uColor or atlas tile × uColor
-│
-└── AssetEditor/                 ← Asset Editor Executable (references EngineCore)
-    ├── AssetEditor.csproj       # Exe; references EngineCore.csproj
-    ├── Program.cs               # Entry point — launches EditorWindow
-    ├── EditorWindow.cs          # GameWindow subclass — Phase E1 complete: orbit camera, 3D axes+grid, ImGui layout, Export button
-    ├── AssetExporter.cs         # Serialises VoxelModel to JSON; ExportToSharedData() writes to SharedData/Models/
+└── VintageVoxel/                ← GameClient Executable (references EngineCore)
+    ├── VintageVoxel.csproj      # Exe; references EngineCore.csproj
+    ├── Program.cs               # Entry point — configures and runs the Game window
+    ├── Game.cs                  # GameWindow subclass — game loop, VAO/VBO/EBO, render
+    ├── GameState.cs             # GameState enum: MainMenu, Playing, Paused, Exiting
+    ├── DebugWindow.cs           # ImGui overlay: FPS/pos/chunk metrics + mode + toggles
+    ├── ChunkBorderRenderer.cs   # GL_LINES AABB wireframe per chunk (line.vert/frag)
+    ├── HUDRenderer.cs           # 2-D orthographic HUD: crosshair + hotbar slots + item icons
+    ├── Item.cs                  # Item class: Id, Name, MaxStackSize, TextureId; Dirt/Stone/Grass singletons
+    ├── ItemStack.cs             # ItemStack struct: Item? + Count; IsEmpty; Empty sentinel
+    ├── Inventory.cs             # 10-slot hotbar inventory; ScrollHotbar(); AddItem/RemoveItem/HasItem; HeldStack ref
     └── Shaders/
-        ├── editor.vert          # Position-only vertex shader (view + projection matrices)
-        └── editor.frag          # Flat-colour fragment shader (uColor vec3 uniform)
+        ├── shader.vert          # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
+        ├── shader.frag          # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
+        ├── line.vert            # Minimal vertex shader for chunk border lines (position only)
+        ├── line.frag            # Solid-colour fragment shader for debug lines (uColor uniform)
+        ├── hud.vert             # 2-D HUD vertex shader — orthographic pixel-space projection
+        └── hud.frag             # 2-D HUD fragment shader — flat uColor or atlas tile × uColor
 ```
 ```
 

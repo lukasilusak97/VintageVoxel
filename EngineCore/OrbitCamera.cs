@@ -81,4 +81,10 @@ public sealed class OrbitCamera
 
     /// <summary>Call when the window is resized so the projection stays correct.</summary>
     public void UpdateAspect(float aspect) => _aspect = aspect;
+
+    /// <summary>Vertical field-of-view in radians.</summary>
+    public float FovY => _fovY;
+
+    /// <summary>Viewport aspect ratio (width / height).</summary>
+    public float Aspect => _aspect;
 }
