@@ -31,6 +31,12 @@ public class Game : GameWindow
     // Set to true when the chunk set changes so border geometry is rebuilt.
     private bool _bordersDirty = true;
 
+    // --- Phase 14: Persistence ---
+    // Folder that holds per-chunk .bin files (one file per loaded chunk).
+    private readonly string _savePath = WorldPersistence.DefaultSavePath;
+    // Last save/load status shown in the debug overlay.
+    private string? _lastSaveStatus;
+
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -77,6 +83,15 @@ public class Game : GameWindow
         // -----------------------------------------------------------------------
         _world = new World();
         _world.Update(_camera.Position, out var initial, out _);
+
+        // Phase 14: replace freshly-generated chunks with any saved counterparts.
+        // We do this BEFORE lighting so BFS runs on the restored block data.
+        foreach (var key in initial)
+        {
+            if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
+                _world.ReplaceChunk(key, saved);
+        }
+
         // Compute lighting for all initially loaded chunks before uploading geometry.
         // All chunks are in the dictionary so cross-chunk BFS works correctly.
         LightEngine.PropagateSunlight(_world);
@@ -239,6 +254,13 @@ public class Game : GameWindow
 
         if (added.Count > 0)
         {
+            // Phase 14: replace freshly-generated streaming chunks with saved data.
+            foreach (var key in added)
+            {
+                if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
+                    _world.ReplaceChunk(key, saved);
+            }
+
             // Compute lighting for the new chunks plus their immediate neighbours
             // (seam-accurate BFS needs the neighbour data available first).
             foreach (var key in added)
@@ -353,7 +375,8 @@ public class Game : GameWindow
                 frameTimeMs: (float)(args.Time * 1000.0),
                 playerPos: _camera.Position,
                 chunksLoaded: _chunkGpuData.Count,
-                creativeMode: _camera.CreativeMode);
+                creativeMode: _camera.CreativeMode,
+                saveStatus: _lastSaveStatus);
         }
         _imgui.Render(); // Render the ImGui frame (empty if overlay is hidden).
 
@@ -491,6 +514,13 @@ public class Game : GameWindow
             // Reset vertical velocity so there is no launch impulse on switch.
             _camera.Velocity = Vector3.Zero;
         }
+
+        // Ctrl+S — save all currently loaded chunks to disk.
+        if (e.Key == Keys.S && (e.Modifiers & OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Control) != 0)
+        {
+            int count = WorldPersistence.SaveAll(_savePath, _world);
+            _lastSaveStatus = $"Saved {count} chunk(s) at {DateTime.Now:HH:mm:ss}";
+        }
     }
 
     protected override void OnTextInput(TextInputEventArgs e)
@@ -511,6 +541,9 @@ public class Game : GameWindow
     protected override void OnUnload()
     {
         base.OnUnload();
+
+        // Phase 14: auto-save all loaded chunks when the game window closes.
+        WorldPersistence.SaveAll(_savePath, _world);
 
         GL.BindVertexArray(0);
         foreach (var gpu in _chunkGpuData.Values)

@@ -199,4 +199,16 @@ public class World
         chunk.ChiseledBlocks.TryGetValue(idx, out var chisel);
         return chisel;
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 14: persistence support
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Replaces the chunk stored at <paramref name="key"/> with
+    /// <paramref name="chunk"/>.  Used by <see cref="WorldPersistence"/> to swap
+    /// the freshly-generated chunk for the player's saved version immediately
+    /// after <see cref="Update"/> creates the slot.
+    /// </summary>
+    internal void ReplaceChunk(Vector2i key, Chunk chunk) => _chunks[key] = chunk;
 }

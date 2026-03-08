@@ -46,6 +46,39 @@ public class Chunk
     }
 
     // ------------------------------------------------------------------
+    // Serialization support
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates a chunk whose block array is left as all-Air (skips Generate).
+    /// Used exclusively by <see cref="WorldPersistence"/> — the caller is
+    /// responsible for filling <see cref="_blocks"/> via <see cref="LoadBlocksFromSave"/>.
+    /// </summary>
+    internal static Chunk CreateForDeserialization(OpenTK.Mathematics.Vector3i position)
+        => new(position, skipGenerate: true);
+
+    /// Constructor overload that optionally skips terrain generation.
+    private Chunk(OpenTK.Mathematics.Vector3i position, bool skipGenerate)
+    {
+        Position = position;
+        if (!skipGenerate) Generate();
+    }
+
+    /// <summary>Returns the raw block ID at the given flat array index. Used by WorldPersistence.</summary>
+    internal ushort GetRawBlockId(int flatIndex) => _blocks[flatIndex].Id;
+
+    /// <summary>
+    /// Overwrites the entire block array from a saved ID list produced by
+    /// <see cref="WorldPersistence"/>.  Transparency is derived directly from
+    /// the block ID (Air = transparent, everything else = opaque).
+    /// </summary>
+    internal void LoadBlocksFromSave(ushort[] savedIds)
+    {
+        for (int i = 0; i < Volume; i++)
+            _blocks[i] = new Block { Id = savedIds[i], IsTransparent = savedIds[i] == 0 };
+    }
+
+    // ------------------------------------------------------------------
     // Public block access
     // ------------------------------------------------------------------
 

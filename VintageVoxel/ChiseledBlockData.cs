@@ -65,4 +65,14 @@ public class ChiseledBlockData
             if (_subVoxels[i]) return true;
         return false;
     }
+
+    // ------------------------------------------------------------------
+    // Serialization support (WorldPersistence only)
+    // ------------------------------------------------------------------
+
+    /// <summary>Returns the raw bool at flat <paramref name="index"/>. Used by WorldPersistence.</summary>
+    internal bool GetRaw(int index) => _subVoxels[index];
+
+    /// <summary>Sets the raw bool at flat <paramref name="index"/>. Used by WorldPersistence.</summary>
+    internal void SetRaw(int index, bool value) => _subVoxels[index] = value;
 }

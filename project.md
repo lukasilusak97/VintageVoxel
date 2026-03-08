@@ -25,6 +25,7 @@
 | 11    | Advanced Lighting (Flood Fill) | ✅ Done   |
 | 12    | Optimization (Frustum Culling) | ✅ Done   |
 | 13    | Chiseling (Micro-Blocks)       | ✅ Done   |
+| 14    | Persistence (Saving/Loading)   | ✅ Done   |
 
 ---
 
@@ -96,6 +97,26 @@
     - **Left Click on chiseled block** — removes the specific sub-voxel the ray hit; if the last sub-voxel is removed the container reverts to Air and its `ChiseledBlocks` entry is cleaned up
     - **Right Click on chiseled block** — fills the adjacent sub-voxel (using `SubNormal`); if the adjacent position is outside the chiseled block, falls back to placing a Stone block in world space
   - `DebugWindow` hint line updated to display the Middle / Left / Right click chiseling controls
+- **Persistence — Saving/Loading (Phase 14):**
+  - **`WorldPersistence`** — new static class; handles all binary I/O for chunk data:
+    - `DefaultSavePath` — `%AppData%\VintageVoxel\Saves\default`; created on demand
+    - `SaveChunk(folder, key, chunk)` — writes one chunk to `c_{X}_{Z}.bin` using `BinaryWriter`
+    - `SaveAll(folder, world)` — iterates all loaded chunks and calls `SaveChunk`; returns the count of files written
+    - `TryLoadChunk(folder, key, out chunk)` — reads and validates a chunk file; returns `false` (regenerate fresh) if the file is missing or corrupt; catches all IO/parse exceptions
+  - **Binary file format** (`c_{X}_{Z}.bin`): 4-byte magic `"VVCK"` + 1-byte version `1` + chunk XZ int32 pair followed by block RLE and chiseled block RLE sections
+  - **RLE compression** — Run-Length Encoding applied to both the flat 32,768-block array and each 4,096 sub-voxel grid; typical terrain chunks compress from ~64 KB of raw IDs to tens of bytes; represented as `(ushort id, ushort runLength)` pairs for blocks and `(byte filled, ushort runLength)` pairs for sub-voxels
+  - **`Chunk`** gains three internal members for serialization:
+    - `CreateForDeserialization(Vector3i pos)` — static factory that creates a chunk without calling `Generate()`, avoiding wasted terrain computation when loading a saved chunk
+    - `GetRawBlockId(int flatIndex)` — flat-array read used by RLE encoder
+    - `LoadBlocksFromSave(ushort[] savedIds)` — overwrites the entire `_blocks` array; derives `IsTransparent` from `id == 0`
+  - **`ChiseledBlockData`** gains two internal raw accessors `GetRaw(int index)` and `SetRaw(int index, bool)` for the sub-voxel encoder/decoder
+  - **`World.ReplaceChunk(key, chunk)`** — internal method that swaps a generated chunk for a loaded one after `Update()` adds the slot
+  - **Game integration:**
+    - Initial load (`OnLoad`): after `_world.Update()` generates the first ring, each key is checked against the save folder; matching chunks are swapped in before `LightEngine.PropagateSunlight()` runs, so BFS propagates over restored terrain data
+    - Streaming load (`OnUpdateFrame`): same swap applied to every newly added chunk before lighting and mesh rebuild, so saves load transparently as the player explores
+    - **Ctrl+S** — manual save: calls `WorldPersistence.SaveAll`, updates `_lastSaveStatus` (shown in green in the debug overlay)
+    - **Auto-save on exit** — `OnUnload` calls `WorldPersistence.SaveAll` before releasing GPU resources; world state is always preserved on clean close
+  - **`DebugWindow.Draw`** gains a `saveStatus` optional parameter; when non-null the last save message is shown in green below the Mode line; hint line updated to include `[Ctrl+S] Save world`
 - **Physics & Movement (Phase 10):**
   - `Camera.PhysicsUpdate(world, keyboard, dt)` — unified physics tick called from `Game.OnUpdateFrame`; completely replaces the old `ProcessKeyboard`
   - **Survival mode** (default): gravity (`−25 world units/s²`) accumulates in `Velocity.Y`; horizontal velocity (`5 u/s`) is set directly from WASD input every frame (no sliding momentum); **Space** jumps with an initial upward velocity of `8 u/s`; `Velocity.Y` is clamped at `−60 u/s` terminal velocity
@@ -152,8 +173,7 @@ VintageVoxel/
 │   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture/lighting-debug toggles
 │   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
 │   ├── LightEngine.cs       # BFS flood-fill lighting: sunlight column-fill + horizontal spread; AO scaffold
-│   ├── ChiseledBlockData.cs # 16×16×16 boolean sub-voxel grid; SourceBlockId; Get/Set/InBounds/HasAnyFilled helpers
-│   └── Shaders/
+│   ├── ChiseledBlockData.cs # 16×16×16 boolean sub-voxel grid; SourceBlockId; Get/Set/InBounds/HasAnyFilled helpers    ├── WorldPersistence.cs  # Binary save/load: per-chunk .bin files with RLE compression; Ctrl+S + auto-save on exit│   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
 │       ├── shader.frag      # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
 │       ├── line.vert        # Minimal vertex shader for chunk border lines (position only)

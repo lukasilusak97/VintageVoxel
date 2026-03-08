@@ -38,7 +38,9 @@ public class DebugWindow
     /// <param name="playerPos">Current camera / player world position.</param>
     /// <param name="chunksLoaded">Number of chunks currently in GPU memory.</param>
     /// <param name="creativeMode">Whether creative / fly mode is active.</param>
-    public void Draw(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode)
+    /// <param name="saveStatus">Optional last save / load status line shown in the overlay.</param>
+    public void Draw(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode,
+                     string? saveStatus = null)
     {
         // Smooth FPS to stop the number flickering.
         _smoothFps = _smoothFps < 1f
@@ -63,6 +65,8 @@ public class DebugWindow
         ImGui.Text($"Pos        : {playerPos.X,7:F1}, {playerPos.Y,6:F1}, {playerPos.Z,7:F1}");
         ImGui.Text($"Chunks     : {chunksLoaded}");
         ImGui.Text($"Mode       : {(creativeMode ? "Creative" : "Survival")}");
+        if (saveStatus != null)
+            ImGui.TextColored(new System.Numerics.Vector4(0.4f, 1f, 0.4f, 1f), saveStatus);
 
         ImGui.Spacing();
 
@@ -88,7 +92,8 @@ public class DebugWindow
 
         ImGui.Spacing();
         ImGui.TextDisabled("[F3] Toggle debug UI  [F] Toggle Creative/Survival");
-        ImGui.TextDisabled("[Middle Click] Chisel block  [LClick] Remove sub-voxel  [RClick] Add sub-voxel");
+        ImGui.TextDisabled("[Ctrl+S] Save world  [Middle Click] Chisel block");
+        ImGui.TextDisabled("[LClick] Remove sub-voxel  [RClick] Add sub-voxel");
 
         ImGui.End();
     }
