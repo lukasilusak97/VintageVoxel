@@ -27,6 +27,8 @@
 | 13    | Chiseling (Micro-Blocks)       | ✅ Done   |
 | 14    | Persistence (Saving/Loading)   | ✅ Done   |
 | 15    | Game State Management (Menus)  | ✅ Done   |
+| 16    | Inventory Architecture         | ✅ Done   |
+| 17    | HUD (Heads-Up Display)         | ✅ Done   |
 
 ---
 
@@ -98,6 +100,30 @@
     - **Left Click on chiseled block** — removes the specific sub-voxel the ray hit; if the last sub-voxel is removed the container reverts to Air and its `ChiseledBlocks` entry is cleaned up
     - **Right Click on chiseled block** — fills the adjacent sub-voxel (using `SubNormal`); if the adjacent position is outside the chiseled block, falls back to placing a Stone block in world space
   - `DebugWindow` hint line updated to display the Middle / Left / Right click chiseling controls
+- **Inventory Architecture (Phase 16):****
+  - **`Item`** (`Item.cs`) — immutable class with `Id`, `Name`, `MaxStackSize`, and `TextureId` (atlas tile index); three pre-defined block-item singletons: `Item.Dirt` (ID 1), `Item.Stone` (ID 2), `Item.Grass` (ID 3)
+  - **`ItemStack`** (`ItemStack.cs`) — lightweight mutable struct pairing an `Item?` reference and an integer `Count`; `IsEmpty` property; `ItemStack.Empty` sentinel matches the `default` value
+  - **`Inventory`** (`Inventory.cs`) — fixed-size `ItemStack[]` array with `HotbarSize = 10` constant; `SelectedSlot` int tracks the active hotbar index; key methods:
+    - `ScrollHotbar(int delta)` — wraps `SelectedSlot` cyclically (positive = next slot); called from `OnMouseWheel` with delta ±1
+    - `SelectSlot(int index)` — direct selection clamped to [0, HotbarSize)
+    - `AddItem(item, count)` — first merges into partial stacks, then fills empty slots; returns overflow count
+    - `RemoveItem(item, count)` — removes from first matching stacks; returns actual count removed
+    - `HasItem(item, count)` — returns true when total owned quantity meets the requirement
+    - `HeldStack` — `ref` property giving direct access to the stack in `SelectedSlot`
+  - **`Game._inventory`** — `Inventory(HotbarSize)` created at startup; pre-seeded with 64× Grass, 64× Dirt, 64× Stone stacks for testing
+  - **`OnMouseWheel` override** — catches scroll events when `_gameState == Playing` and the cursor is grabbed; calls `_inventory.ScrollHotbar(±1)` so the mouse wheel cycles the hotbar
+  - **`PlaceHeldBlock(wx, wy, wz)`** — new helper in `Game`; reads `_inventory.HeldStack` to determine the block ID to place (falls back to Stone ID 2 on an empty slot); replaces all hardcoded `Id = 2` right-click placements
+  - **`DebugWindow.Draw`** gains `heldItem` (`ItemStack`) and `hotbarSlot` (`int`) parameters; overlay now shows `Held [N] : ItemName xCount` (or "(empty)") below the Mode line; hint row updated to include `[Scroll] Cycle hotbar`
+- **HUD — Heads-Up Display (Phase 17):**
+  - **`HUDRenderer`** (`HUDRenderer.cs`) — self-contained 2-D rendering class; owns a dedicated `hud.vert`/`hud.frag` shader pair, a single shared VAO/VBO/EBO (quad, 4 vertices × 4 floats — dynamic draw), and the orthographic projection matrix; renders every frame between the 3-D world pass and ImGui
+  - **`hud.vert` / `hud.frag`** — minimal 2-D GLSL pair; vertex shader applies `uProjection` (orthographic, pixel-space) to a `vec2 aPosition`; fragment shader selects between flat `uColor` (solid quads) and `texture(uTexture, vTexCoord) * uColor` (atlas-tiled icons) via the `uUseTexture` toggle
+  - **`Shader.SetVector4`** — new uniform helper added to `Shader.cs` to support the `uColor` `vec4` uniform
+  - **2-D GL state management** — `Render()` enables `GL_BLEND` (SrcAlpha / OneMinusSrcAlpha) and disables `GL_DEPTH_TEST` + `GL_CULL_FACE` before drawing; restores all three after, ensuring 3-D state is never corrupted
+  - **Crosshair** — two overlapping white quads (horizontal 20×2 px, vertical 2×20 px) centered at the exact screen midpoint; a 1-pixel-wider dark shadow quad under each bar keeps it readable against bright sky and snow
+  - **Hotbar** — 10 × 50×50 px slots laid out horizontally at the bottom-center of the screen (4 px gap, 6 px bottom padding); each slot comprises: a 2-px dark border (`DrawQuad`), an inner background quad, and an optional item icon; the selected slot gets a bright white border and a lighter background tint
+  - **Item icons** — textured via `DrawAtlasTile()`; tile index resolved with `BlockRegistry.TileForFace(itemId, 0)` (top face) so icons match the block's appearance in-world; 4 px inner padding shrinks the icon to 42×42 px inside the 50-px slot
+  - **`SetScreenSize(w, h)`** — rebuilds the ortho matrix on window resize; hooked into `Game.OnResize` alongside the camera aspect-ratio update and ImGui resize
+  - **`Game` integration** — `_hud` field initialised in `OnLoad` after the atlas is ready; `_hud.Render()` called in `OnRenderFrame` only when `_gameState == Playing` (HUD hidden on main menu and pause screen); `_hud.Dispose()` called in `OnUnload`
 - **Game State Management (Phase 15):**
   - **`GameState` enum** (`GameState.cs`) — four named states: `MainMenu`, `Playing`, `Paused`, `Exiting`; documents the intended flow in XML comments
   - **`_gameState` field** in `Game` — starts as `GameState.MainMenu` so the game opens on the main menu rather than jumping straight into gameplay
@@ -187,11 +213,20 @@ VintageVoxel/
 │   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture/lighting-debug toggles
 │   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
 │   ├── LightEngine.cs       # BFS flood-fill lighting: sunlight column-fill + horizontal spread; AO scaffold
-│   ├── ChiseledBlockData.cs # 16×16×16 boolean sub-voxel grid; SourceBlockId; Get/Set/InBounds/HasAnyFilled helpers    ├── WorldPersistence.cs  # Binary save/load: per-chunk .bin files with RLE compression; Ctrl+S + auto-save on exit│   └── Shaders/
+│   ├── ChiseledBlockData.cs # 16×16×16 boolean sub-voxel grid; SourceBlockId; Get/Set/InBounds/HasAnyFilled helpers
+│   ├── WorldPersistence.cs  # Binary save/load: per-chunk .bin files with RLE compression; Ctrl+S + auto-save on exit
+│   ├── Item.cs              # Item class: Id, Name, MaxStackSize, TextureId; Dirt/Stone/Grass singletons
+│   ├── ItemStack.cs         # ItemStack struct: Item? + Count; IsEmpty; Empty sentinel
+│   ├── Inventory.cs         # 10-slot hotbar inventory; ScrollHotbar(); AddItem/RemoveItem/HasItem; HeldStack ref
+│   ├── GameState.cs         # GameState enum: MainMenu, Playing, Paused, Exiting
+│   ├── HUDRenderer.cs       # 2-D orthographic HUD: crosshair + hotbar slots + item icons (hud.vert/frag)
+│   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
 │       ├── shader.frag      # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
 │       ├── line.vert        # Minimal vertex shader for chunk border lines (position only)
-│       └── line.frag        # Solid-colour fragment shader for debug lines (uColor uniform)
+│       ├── line.frag        # Solid-colour fragment shader for debug lines (uColor uniform)
+│       ├── hud.vert         # 2-D HUD vertex shader — orthographic pixel-space projection
+│       └── hud.frag         # 2-D HUD fragment shader — flat uColor or atlas tile × uColor
 └── roadmap.md               # Full 8-phase build plan
 ```
 

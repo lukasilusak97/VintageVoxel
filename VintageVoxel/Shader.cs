@@ -84,6 +84,9 @@ public class Shader : IDisposable
     public void SetVector3(string name, Vector3 value)
         => GL.Uniform3(GL.GetUniformLocation(Handle, name), value);
 
+    public void SetVector4(string name, Vector4 value)
+        => GL.Uniform4(GL.GetUniformLocation(Handle, name), value);
+
     // --- IDisposable ---
     // OpenGL objects live on the GPU; we must delete them explicitly when done.
     public void Dispose()

@@ -41,6 +41,13 @@ public class Game : GameWindow
     // --- Phase 15: Game State Machine ---
     private GameState _gameState = GameState.MainMenu;
 
+    // --- Phase 16: Inventory ---
+    // 10-slot hotbar; pre-seeded with one Dirt and one Stone stack for easy testing.
+    private readonly Inventory _inventory = new(Inventory.HotbarSize);
+
+    // --- Phase 17: HUD ---
+    private HUDRenderer _hud = null!;
+
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -108,6 +115,16 @@ public class Game : GameWindow
         _imgui = new ImGuiController(Size.X, Size.Y);
         _debugWindow = new DebugWindow();
         _borders = new ChunkBorderRenderer();
+
+        // Pre-seed the hotbar so the player has something to hold on first load.
+        _inventory.AddItem(Item.Grass, 64);
+        _inventory.AddItem(Item.Dirt, 64);
+        _inventory.AddItem(Item.Stone, 64);
+
+        // Phase 17: HUD renderer (crosshair + hotbar).
+        // Use FramebufferSize (physical pixels) rather than ClientSize/Size so the
+        // ortho projection matches the actual GL viewport on HiDPI displays.
+        _hud = new HUDRenderer(FramebufferSize.X, FramebufferSize.Y);
     }
 
     // -------------------------------------------------------------------------
@@ -197,6 +214,19 @@ public class Game : GameWindow
         if (lx == Chunk.Size - 1) RebuildChunk(new Vector2i(cx + 1, cz));
         if (lz == 0) RebuildChunk(new Vector2i(cx, cz - 1));
         if (lz == Chunk.Size - 1) RebuildChunk(new Vector2i(cx, cz + 1));
+    }
+
+    /// <summary>
+    /// Places the block represented by the currently held hotbar item at world
+    /// position (wx, wy, wz).  If the hotbar is empty, falls back to Stone (ID 2).
+    /// </summary>
+    private void PlaceHeldBlock(int wx, int wy, int wz)
+    {
+        ref var held = ref _inventory.HeldStack;
+        ushort id = held.IsEmpty ? (ushort)2 : (ushort)held.Item!.Id;
+        _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
+        LightEngine.UpdateAtBlock(wx, wy, wz, _world);
+        RebuildAffectedChunks(wx, wy, wz);
     }
 
     protected override void OnUpdateFrame(FrameEventArgs args)
@@ -370,6 +400,10 @@ public class Game : GameWindow
             _borders.Render(ref view, ref projection);
         }
 
+        // --- Phase 17: 2-D HUD (crosshair + hotbar) — Playing state only ---
+        if (_gameState == GameState.Playing)
+            _hud.Render(_inventory, _atlas, FramebufferSize.X, FramebufferSize.Y);
+
         // --- ImGui debug dashboard (Playing state only) ---
         if (_debugVisible && _gameState == GameState.Playing)
         {
@@ -379,6 +413,8 @@ public class Game : GameWindow
                 playerPos: _camera.Position,
                 chunksLoaded: _chunkGpuData.Count,
                 creativeMode: _camera.CreativeMode,
+                heldItem: _inventory.HeldStack,
+                hotbarSlot: _inventory.SelectedSlot,
                 saveStatus: _lastSaveStatus);
         }
 
@@ -461,21 +497,15 @@ public class Game : GameWindow
                     else
                     {
                         // Adjacent position is outside the chiseled block — fall back to
-                        // placing a regular Stone block in the adjacent world position.
+                        // placing a block from the held hotbar item in the adjacent world position.
                         var place = hit.BlockPos + hit.Normal;
-                        _world.SetBlock(place.X, place.Y, place.Z,
-                            new Block { Id = 2, IsTransparent = false });
-                        LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
-                        RebuildAffectedChunks(place.X, place.Y, place.Z);
+                        PlaceHeldBlock(place.X, place.Y, place.Z);
                     }
                 }
                 else
                 {
                     var place = hit.BlockPos + hit.Normal;
-                    _world.SetBlock(place.X, place.Y, place.Z,
-                        new Block { Id = 2, IsTransparent = false }); // Stone
-                    LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
-                    RebuildAffectedChunks(place.X, place.Y, place.Z);
+                    PlaceHeldBlock(place.X, place.Y, place.Z);
                 }
             }
         }
@@ -552,6 +582,19 @@ public class Game : GameWindow
         }
     }
 
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+
+        // Hotbar cycling — only when Playing and cursor is grabbed (FPS mode).
+        if (_gameState == GameState.Playing && CursorState == CursorState.Grabbed)
+        {
+            // e.OffsetY > 0 → scroll up → go to the previous slot (cycle backwards).
+            int delta = e.OffsetY > 0 ? -1 : 1;
+            _inventory.ScrollHotbar(delta);
+        }
+    }
+
     protected override void OnTextInput(TextInputEventArgs e)
     {
         base.OnTextInput(e);
@@ -565,6 +608,8 @@ public class Game : GameWindow
         GL.Viewport(0, 0, e.Width, e.Height);
         _camera?.SetAspectRatio(e.Width / (float)e.Height);
         _imgui?.WindowResized(e.Width, e.Height);
+        // HUD uses physical framebuffer pixels for its ortho projection.
+        _hud?.SetScreenSize(FramebufferSize.X, FramebufferSize.Y);
     }
 
     protected override void OnUnload()
@@ -582,6 +627,7 @@ public class Game : GameWindow
         _atlas.Dispose();
         _shader.Dispose();
         _borders.Dispose();
+        _hud.Dispose();
         _imgui.Dispose();
     }
 
