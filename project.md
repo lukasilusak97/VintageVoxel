@@ -24,6 +24,7 @@
 | 10    | Physics & Movement           | ✅ Done     |
 | 11    | Advanced Lighting (Flood Fill) | ✅ Done   |
 | 12    | Optimization (Frustum Culling) | ✅ Done   |
+| 13    | Chiseling (Micro-Blocks)       | ✅ Done   |
 
 ---
 
@@ -81,6 +82,20 @@
   - `Frustum.FromViewProjection(view, projection)` — factory method takes the already-computed matrices to avoid redundant matrix construction
   - `Game.OnRenderFrame` — builds the frustum once per frame (after computing `view`/`projection` for the shader uniforms); each chunk's world-space AABB `[cx×32 .. (cx+1)×32] × [0..32] × [cz×32 .. (cz+1)×32]` is tested before issuing any draw call; chunks behind/beside the camera are skipped with zero GPU cost
   - Chunks are still fully loaded and meshed regardless of visibility; frustum culling is a draw-call filter only, so streaming, lighting, and interaction logic are unaffected
+- **Chiseling — Micro-Block System (Phase 13):**
+  - **`ChiseledBlockData`** — new class holding a flat `bool[4096]` array representing a 16×16×16 sub-voxel grid; `Index(x,y,z)` = `x + 16*(y + 16*z)`; `Get()` / `Set()` / `InBounds()` / `HasAnyFilled()` helpers; `SourceBlockId` preserves the original block type for texture lookup
+  - **`Block.ChiseledId = 999`** — sentinel ID that marks a block as a chiseled container; stored as a normal `Block` in the chunk array with `IsTransparent = false` so meshing and physics treat it as solid until interacted with
+  - **`Chunk.ChiseledBlocks`** — `Dictionary<int, ChiseledBlockData>` keyed by flat block array index; `GetOrCreateChiseled(x, y, z, sourceId)` creates a fully-filled entry on first access; loaded/unloaded with the owning chunk
+  - **`ChunkMeshBuilder`** — detects `Block.ChiseledId` in the main block loop and calls `EmitChiseledBlock()`; sub-voxel loop iterates 16³ positions, applying the same six-face culling rule at sub-voxel granularity (intra-block neighbours first, then the adjacent full block at the outer boundary); `EmitSubFace()` emits a 0.0625-unit quad with the source block's atlas tile and `light = ao = 1.0`; normal blocks skip the chiseled path entirely
+  - **`Raycaster.HitResult`** — extended with `IsChiseled` bool, `SubVoxelPos` (Vector3i [0,15]³), and `SubNormal` (sub-voxel face normal); two constructors — one for regular blocks, one for chiseled hits; backward-compatible defaults for non-chiseled hits
+  - **`Raycaster.CastSubVoxel()`** — private helper that, when the outer DDA enters a `ChiseledId` block, computes the ray entry point via slab intersection, maps it into 16×16×16 integer sub-voxel space (scaled by N=16), and runs a standard DDA limited to the [0,16)³ grid; returns default (no hit) if all sub-voxels along the ray are empty, allowing the outer DDA to continue past the block
+  - **`Raycaster.Cast()`** — modified check: when the hit block is `ChiseledId`, dispatches to `CastSubVoxel`; if that returns no hit (fully-chiseled block), the outer loop continues instead of stopping
+  - **`World.GetChiselData(wx, wy, wz)`** — cross-chunk look-up returning the `ChiseledBlockData` for a world position, or `null` if not chiseled / not loaded
+  - **Interaction controls:**
+    - **Middle Click** — converts the targeted solid block into a chiseled container (all 4096 sub-voxels filled, inheriting source block's texture); triggers mesh rebuild
+    - **Left Click on chiseled block** — removes the specific sub-voxel the ray hit; if the last sub-voxel is removed the container reverts to Air and its `ChiseledBlocks` entry is cleaned up
+    - **Right Click on chiseled block** — fills the adjacent sub-voxel (using `SubNormal`); if the adjacent position is outside the chiseled block, falls back to placing a Stone block in world space
+  - `DebugWindow` hint line updated to display the Middle / Left / Right click chiseling controls
 - **Physics & Movement (Phase 10):**
   - `Camera.PhysicsUpdate(world, keyboard, dt)` — unified physics tick called from `Game.OnUpdateFrame`; completely replaces the old `ProcessKeyboard`
   - **Survival mode** (default): gravity (`−25 world units/s²`) accumulates in `Velocity.Y`; horizontal velocity (`5 u/s`) is set directly from WASD input every frame (no sliding momentum); **Space** jumps with an initial upward velocity of `8 u/s`; `Velocity.Y` is clamped at `−60 u/s` terminal velocity
@@ -137,6 +152,7 @@ VintageVoxel/
 │   ├── DebugWindow.cs       # ImGui overlay: FPS/pos/chunk metrics + mode + wireframe/borders/no-texture/lighting-debug toggles
 │   ├── ChunkBorderRenderer.cs # GL_LINES AABB wireframe per chunk (line.vert/frag), lazily rebuilt
 │   ├── LightEngine.cs       # BFS flood-fill lighting: sunlight column-fill + horizontal spread; AO scaffold
+│   ├── ChiseledBlockData.cs # 16×16×16 boolean sub-voxel grid; SourceBlockId; Get/Set/InBounds/HasAnyFilled helpers
 │   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
 │       ├── shader.frag      # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug

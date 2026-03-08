@@ -369,26 +369,104 @@ public class Game : GameWindow
 
         if (e.Button == MouseButton.Left)
         {
-            // Left click — break the targeted block (replace with Air).
+            // Left click — break the targeted block or remove a single sub-voxel.
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
-                _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
-                LightEngine.UpdateAtBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
+                if (hit.IsChiseled)
+                {
+                    // Remove the specific sub-voxel that was hit.
+                    var chisel = _world.GetChiselData(
+                        hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
+                    if (chisel != null)
+                    {
+                        chisel.Set(hit.SubVoxelPos.X, hit.SubVoxelPos.Y, hit.SubVoxelPos.Z, false);
+
+                        // If the last sub-voxel was removed, convert the container back to Air.
+                        if (!chisel.HasAnyFilled())
+                        {
+                            _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z,
+                                Block.Air);
+                            int cx = (int)MathF.Floor((float)hit.BlockPos.X / Chunk.Size);
+                            int cz = (int)MathF.Floor((float)hit.BlockPos.Z / Chunk.Size);
+                            if (_world.Chunks.TryGetValue(new Vector2i(cx, cz), out var ch))
+                                ch.ChiseledBlocks.Remove(Chunk.Index(
+                                    hit.BlockPos.X - cx * Chunk.Size,
+                                    hit.BlockPos.Y,
+                                    hit.BlockPos.Z - cz * Chunk.Size));
+                            LightEngine.UpdateAtBlock(
+                                hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
+                        }
+                    }
+                }
+                else
+                {
+                    _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
+                    LightEngine.UpdateAtBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
+                }
                 RebuildAffectedChunks(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
             }
         }
         else if (e.Button == MouseButton.Right)
         {
-            // Right click — place a Stone block on the face the player is looking at.
+            // Right click — place or restore a sub-voxel, or place a Stone block.
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
-                var place = hit.BlockPos + hit.Normal;
-                _world.SetBlock(place.X, place.Y, place.Z,
-                    new Block { Id = 2, IsTransparent = false }); // Stone
-                LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
-                RebuildAffectedChunks(place.X, place.Y, place.Z);
+                if (hit.IsChiseled)
+                {
+                    var newSub = hit.SubVoxelPos + hit.SubNormal;
+                    var chisel = _world.GetChiselData(
+                        hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
+                    if (chisel != null && ChiseledBlockData.InBounds(newSub.X, newSub.Y, newSub.Z))
+                    {
+                        // Fill the adjacent sub-voxel within the same chiseled block.
+                        chisel.Set(newSub.X, newSub.Y, newSub.Z, true);
+                        RebuildAffectedChunks(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
+                    }
+                    else
+                    {
+                        // Adjacent position is outside the chiseled block — fall back to
+                        // placing a regular Stone block in the adjacent world position.
+                        var place = hit.BlockPos + hit.Normal;
+                        _world.SetBlock(place.X, place.Y, place.Z,
+                            new Block { Id = 2, IsTransparent = false });
+                        LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
+                        RebuildAffectedChunks(place.X, place.Y, place.Z);
+                    }
+                }
+                else
+                {
+                    var place = hit.BlockPos + hit.Normal;
+                    _world.SetBlock(place.X, place.Y, place.Z,
+                        new Block { Id = 2, IsTransparent = false }); // Stone
+                    LightEngine.UpdateAtBlock(place.X, place.Y, place.Z, _world);
+                    RebuildAffectedChunks(place.X, place.Y, place.Z);
+                }
+            }
+        }
+        else if (e.Button == MouseButton.Middle)
+        {
+            // Middle click — convert the targeted block into a chiseled container.
+            // The block is replaced with Block.ChiseledId; a ChiseledBlockData
+            // (all 4096 sub-voxels filled) is registered in the owning chunk.
+            var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
+            if (hit.Hit && !hit.IsChiseled)
+            {
+                int wx = hit.BlockPos.X, wy = hit.BlockPos.Y, wz = hit.BlockPos.Z;
+                ushort origId = _world.GetBlock(wx, wy, wz).Id;
+
+                _world.SetBlock(wx, wy, wz,
+                    new Block { Id = Block.ChiseledId, IsTransparent = false });
+
+                int cx = (int)MathF.Floor((float)wx / Chunk.Size);
+                int cz = (int)MathF.Floor((float)wz / Chunk.Size);
+                if (_world.Chunks.TryGetValue(new Vector2i(cx, cz), out var chunk))
+                    chunk.GetOrCreateChiseled(wx - cx * Chunk.Size, wy, wz - cz * Chunk.Size,
+                                              origId);
+
+                LightEngine.UpdateAtBlock(wx, wy, wz, _world);
+                RebuildAffectedChunks(wx, wy, wz);
             }
         }
     }

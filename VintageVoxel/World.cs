@@ -174,4 +174,29 @@ public class World
         b = block;
         return true;
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 13: Chiseled block query
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns the <see cref="ChiseledBlockData"/> for the block at the given
+    /// world-space integer coordinates, or <c>null</c> if the block is not
+    /// chiseled / the chunk is not loaded.
+    /// </summary>
+    public ChiseledBlockData? GetChiselData(int worldX, int worldY, int worldZ)
+    {
+        if ((uint)worldY >= (uint)Chunk.Size) return null;
+
+        int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
+
+        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk)) return null;
+
+        int lx = worldX - cx * Chunk.Size;
+        int lz = worldZ - cz * Chunk.Size;
+        int idx = Chunk.Index(lx, worldY, lz);
+        chunk.ChiseledBlocks.TryGetValue(idx, out var chisel);
+        return chisel;
+    }
 }

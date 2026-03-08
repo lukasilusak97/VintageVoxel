@@ -132,6 +132,15 @@ public static class ChunkMeshBuilder
                     if (block.IsTransparent)
                         continue;
 
+                    // Phase 13: chiseled blocks are meshed at sub-voxel granularity.
+                    if (block.Id == Block.ChiseledId)
+                    {
+                        int cidx = Chunk.Index(x, y, z);
+                        if (chunk.ChiseledBlocks.TryGetValue(cidx, out var chiseled))
+                            EmitChiseledBlock(verts, indices, x, y, z, chiseled, chunk, world);
+                        continue; // skip normal full-block face emission
+                    }
+
                     for (int face = 0; face < 6; face++)
                     {
                         var (dx, dy, dz) = NeighbourOffsets[face];
@@ -298,5 +307,129 @@ public static class ChunkMeshBuilder
         float x, float y, float z, float u, float vt, float light, float ao)
     {
         v.Add(x); v.Add(y); v.Add(z); v.Add(u); v.Add(vt); v.Add(light); v.Add(ao);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 13: Chiseled (micro-block) helpers
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Emits sub-voxel geometry for a chiseled block at local chunk position
+    /// (<paramref name="bx"/>, <paramref name="by"/>, <paramref name="bz"/>).
+    ///
+    /// Each sub-voxel occupies 1/SubSize (0.0625) of a world unit.  Face culling
+    /// is applied between sub-voxels first; at the outer boundary of the chiseled
+    /// block the adjacent full block is tested just like normal face culling.
+    /// </summary>
+    private static void EmitChiseledBlock(
+        List<float> verts, List<uint> indices,
+        int bx, int by, int bz, ChiseledBlockData chiseled,
+        Chunk chunk, World? world)
+    {
+        const float sub = 1f / ChiseledBlockData.SubSize;
+
+        for (int sz = 0; sz < ChiseledBlockData.SubSize; sz++)
+            for (int sy = 0; sy < ChiseledBlockData.SubSize; sy++)
+                for (int sx = 0; sx < ChiseledBlockData.SubSize; sx++)
+                {
+                    if (!chiseled.Get(sx, sy, sz)) continue;
+
+                    for (int face = 0; face < 6; face++)
+                    {
+                        var (dx, dy, dz) = NeighbourOffsets[face];
+                        int nx = sx + dx, ny = sy + dy, nz = sz + dz;
+
+                        bool exposed;
+                        if (ChiseledBlockData.InBounds(nx, ny, nz))
+                        {
+                            // Neighbour is inside the same chiseled block.
+                            exposed = !chiseled.Get(nx, ny, nz);
+                        }
+                        else
+                        {
+                            // Neighbour is across the outer boundary of the chiseled block.
+                            // Test the adjacent full block the same way the normal mesher does.
+                            int abx = bx + dx, aby = by + dy, abz = bz + dz;
+                            if (Chunk.InBounds(abx, aby, abz))
+                                exposed = chunk.GetBlock(abx, aby, abz).IsTransparent;
+                            else if (world != null)
+                            {
+                                int wwx = chunk.Position.X * Chunk.Size + abx;
+                                int wwz = chunk.Position.Z * Chunk.Size + abz;
+                                exposed = world.GetBlock(wwx, aby, wwz).IsTransparent;
+                            }
+                            else
+                                exposed = true;
+                        }
+
+                        if (exposed)
+                            EmitSubFace(verts, indices, face,
+                                bx + sx * sub, by + sy * sub, bz + sz * sub,
+                                sub, chiseled.SourceBlockId);
+                    }
+                }
+    }
+
+    /// <summary>
+    /// Appends 4 vertices and 6 indices for a single sub-voxel face.
+    /// Uses the same CCW winding as <see cref="EmitFace"/>.
+    /// Light and AO are set to 1.0 (full-bright) — sub-voxel granularity makes
+    /// per-vertex BFS impractical; a future pass could sample the parent block.
+    /// </summary>
+    private static void EmitSubFace(
+        List<float> verts, List<uint> indices,
+        int face, float ox, float oy, float oz, float size, ushort blockId)
+    {
+        uint baseIdx = (uint)(verts.Count / 7);
+        float x0 = ox, x1 = ox + size;
+        float y0 = oy, y1 = oy + size;
+        float z0 = oz, z1 = oz + size;
+
+        int tileIdx = BlockRegistry.TileForFace(blockId, face);
+        float u0 = tileIdx * TextureAtlas.TileUvWidth;
+        float u1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
+
+        switch (face)
+        {
+            case 0: // Top (+Y)
+                AddV(verts, x0, y1, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x0, y1, z1, u0, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z1, u1, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z0, u1, 0f, 1f, 1f);
+                break;
+            case 1: // Bottom (-Y)
+                AddV(verts, x0, y0, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z0, u1, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z1, u1, 1f, 1f, 1f);
+                AddV(verts, x0, y0, z1, u0, 1f, 1f, 1f);
+                break;
+            case 2: // North (-Z)
+                AddV(verts, x0, y0, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x0, y1, z0, u0, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z0, u1, 1f, 1f, 1f);
+                AddV(verts, x1, y0, z0, u1, 0f, 1f, 1f);
+                break;
+            case 3: // South (+Z)
+                AddV(verts, x1, y0, z1, u0, 0f, 1f, 1f);
+                AddV(verts, x1, y1, z1, u0, 1f, 1f, 1f);
+                AddV(verts, x0, y1, z1, u1, 1f, 1f, 1f);
+                AddV(verts, x0, y0, z1, u1, 0f, 1f, 1f);
+                break;
+            case 4: // West (-X)
+                AddV(verts, x0, y0, z1, u0, 0f, 1f, 1f);
+                AddV(verts, x0, y1, z1, u0, 1f, 1f, 1f);
+                AddV(verts, x0, y1, z0, u1, 1f, 1f, 1f);
+                AddV(verts, x0, y0, z0, u1, 0f, 1f, 1f);
+                break;
+            case 5: // East (+X)
+                AddV(verts, x1, y0, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x1, y1, z0, u0, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z1, u1, 1f, 1f, 1f);
+                AddV(verts, x1, y0, z1, u1, 0f, 1f, 1f);
+                break;
+        }
+
+        indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
+        indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
     }
 }

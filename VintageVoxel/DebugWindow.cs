@@ -88,6 +88,7 @@ public class DebugWindow
 
         ImGui.Spacing();
         ImGui.TextDisabled("[F3] Toggle debug UI  [F] Toggle Creative/Survival");
+        ImGui.TextDisabled("[Middle Click] Chisel block  [LClick] Remove sub-voxel  [RClick] Add sub-voxel");
 
         ImGui.End();
     }

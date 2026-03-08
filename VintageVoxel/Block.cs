@@ -21,6 +21,13 @@ public struct Block
     /// </summary>
     public bool IsTransparent;
 
+    /// <summary>
+    /// Special ID that marks a block as a chiseled (micro-block) container.
+    /// The block stores a <see cref="ChiseledBlockData"/> object in
+    /// <see cref="Chunk.ChiseledBlocks"/> at its flat array index.
+    /// </summary>
+    public const ushort ChiseledId = 999;
+
     /// <summary>Air — the absence of a block.</summary>
     public static readonly Block Air = new Block { Id = 0, IsTransparent = true };
 
