@@ -98,6 +98,9 @@ public class Camera
     /// <summary>Call when the window is resized to keep the aspect ratio correct.</summary>
     public void SetAspectRatio(float aspectRatio) => _aspectRatio = aspectRatio;
 
+    /// <summary>The camera's current look direction (normalised).</summary>
+    public Vector3 Front => _front;
+
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------

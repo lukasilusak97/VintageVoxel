@@ -19,7 +19,7 @@
 | 5     | Mesher (Procedural Geometry) | ✅ Done     |
 | 6     | Texturing (Texture Atlas)    | ✅ Done     |
 | 7     | Infinite World Generation    | ✅ Done     |
-| 8     | Interaction (Raycasting)     | ⬜ Not started |
+| 8     | Interaction (Raycasting)     | ✅ Done     |
 
 ---
 
@@ -50,6 +50,13 @@
   - `ChunkMeshBuilder.Build(chunk, world)` — updated to accept an optional `World` reference; boundary faces check the neighbouring chunk via `World.GetBlock()` instead of always being exposed, eliminating wasted geometry at seams
   - `Game`: per-chunk `ChunkGpu` record (VAO + VBO + EBO + IndexCount) stored in `Dictionary<Vector2i, ChunkGpu>`; `UploadChunk()` / `DeleteChunkGpu()` helpers manage GPU lifetime; on new-chunk arrival the four cardinal neighbours are also re-meshed so previously-exposed seam faces get culled
   - Per-frame render loop translates each chunk mesh to world space via `Matrix4.CreateTranslation(cx * 32, 0, cz * 32)` before the draw call
+- Block interaction via DDA raycasting:
+  - `Raycaster.Cast(origin, direction, world)` — Amanatides & Woo DDA voxel traversal; steps through the voxel grid one cell at a time along the ray (always advancing to the nearest axis-aligned boundary), guaranteeing no voxels are skipped; returns the first solid block hit within 8 world units plus the outward face normal of the entered face
+  - Left click — breaks the targeted block (sets it to Air, ID 0); triggers a mesh rebuild of the owning chunk and any adjacent chunks on whose boundary the block sits
+  - Right click — places a Stone block (ID 2) at the face-adjacent position indicated by the hit normal; same re-mesh logic applies
+  - `World.SetBlock(worldX, worldY, worldZ, block)` — mutates a block in-place via the existing `ref Block GetBlock()` handle; returns false for out-of-range / unloaded positions
+  - `Camera.Front` — exposes the normalised look direction to the raycaster
+  - `Game.RebuildChunk(key)` / `Game.RebuildAffectedChunks(wx, wy, wz)` — re-meshes the owning chunk plus the four cardinal neighbours when the modified block is on a chunk boundary, keeping seam culling correct after edits
 
 ---
 
@@ -74,6 +81,7 @@ VintageVoxel/
 │   ├── Texture.cs           # GL texture wrapper — uploads RGBA bytes, nearest filter
 │   ├── TextureAtlas.cs      # Procedural 48x16 atlas (Dirt / Stone / Grass tiles)
 │   ├── BlockRegistry.cs     # Block ID → per-face atlas tile index lookup
+│   ├── Raycaster.cs         # DDA voxel raycast — Cast() returns hit block + face normal
 │   └── Shaders/
 │       ├── shader.vert      # Vertex shader — MVP transform + passes UV to fragment stage
 │       └── shader.frag      # Fragment shader — samples uTexture atlas at vTexCoord

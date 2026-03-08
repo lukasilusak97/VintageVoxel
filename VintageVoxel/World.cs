@@ -124,4 +124,29 @@ public class World
             }
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Block mutation (used by interaction / raycasting)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Writes <paramref name="block"/> to the given world-space integer coordinates.
+    /// Returns <c>false</c> if the position is out of the vertical range or the
+    /// owning chunk is not currently loaded.
+    /// </summary>
+    public bool SetBlock(int worldX, int worldY, int worldZ, Block block)
+    {
+        if ((uint)worldY >= (uint)Chunk.Size) return false;
+
+        int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
+
+        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk)) return false;
+
+        int lx = worldX - cx * Chunk.Size;
+        int lz = worldZ - cz * Chunk.Size;
+        ref Block b = ref chunk.GetBlock(lx, worldY, lz);
+        b = block;
+        return true;
+    }
 }

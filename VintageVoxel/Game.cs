@@ -122,6 +122,37 @@ public class Game : GameWindow
         GL.DeleteBuffer(gpu.Ebo);
     }
 
+    /// <summary>
+    /// Re-meshes and re-uploads the chunk at <paramref name="key"/>, replacing any
+    /// existing GPU data.  Does nothing if the chunk is not loaded.
+    /// </summary>
+    private void RebuildChunk(Vector2i key)
+    {
+        if (!_world.Chunks.TryGetValue(key, out var chunk)) return;
+        if (_chunkGpuData.TryGetValue(key, out var old)) DeleteChunkGpu(old);
+        _chunkGpuData[key] = UploadChunk(chunk);
+    }
+
+    /// <summary>
+    /// Rebuilds the chunk that owns the world block at (wx, _, wz) plus any
+    /// immediately neighbouring chunks whose boundary faces may have changed.
+    /// </summary>
+    private void RebuildAffectedChunks(int wx, int wy, int wz)
+    {
+        int cx = (int)MathF.Floor((float)wx / Chunk.Size);
+        int cz = (int)MathF.Floor((float)wz / Chunk.Size);
+        RebuildChunk(new Vector2i(cx, cz));
+
+        // If the modified block sits on a chunk boundary, the adjacent chunk's
+        // exposed faces change too — rebuild it so seams stay watertight.
+        int lx = wx - cx * Chunk.Size;
+        int lz = wz - cz * Chunk.Size;
+        if (lx == 0) RebuildChunk(new Vector2i(cx - 1, cz));
+        if (lx == Chunk.Size - 1) RebuildChunk(new Vector2i(cx + 1, cz));
+        if (lz == 0) RebuildChunk(new Vector2i(cx, cz - 1));
+        if (lz == Chunk.Size - 1) RebuildChunk(new Vector2i(cx, cz + 1));
+    }
+
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
@@ -232,6 +263,37 @@ public class Game : GameWindow
 
         GL.BindVertexArray(0);
         SwapBuffers();
+    }
+
+    protected override void OnMouseDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseDown(e);
+
+        // Guard: ignore clicks that arrive before OnLoad has finished.
+        if (_camera is null || _world is null) return;
+
+        if (e.Button == MouseButton.Left)
+        {
+            // Left click — break the targeted block (replace with Air).
+            var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
+            if (hit.Hit)
+            {
+                _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
+                RebuildAffectedChunks(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
+            }
+        }
+        else if (e.Button == MouseButton.Right)
+        {
+            // Right click — place a Stone block on the face the player is looking at.
+            var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
+            if (hit.Hit)
+            {
+                var place = hit.BlockPos + hit.Normal;
+                _world.SetBlock(place.X, place.Y, place.Z,
+                    new Block { Id = 2, IsTransparent = false }); // Stone
+                RebuildAffectedChunks(place.X, place.Y, place.Z);
+            }
+        }
     }
 
     protected override void OnResize(ResizeEventArgs e)
