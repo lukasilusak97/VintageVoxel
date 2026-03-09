@@ -12,7 +12,8 @@ public class Camera
     // --- Position & Orientation ---
     public Vector3 Position;
 
-    // Yaw   = horizontal rotation around the Y axis (left/right look).
+    /// <summary>World-space position of the player's feet (eye position minus eye height).</summary>
+    public Vector3 FeetPosition => new Vector3(Position.X, Position.Y - EyeHeight, Position.Z);
     // Pitch = vertical rotation around the X axis (up/down look).
     // Using separate scalars (not a quaternion) is simpler for FPS-style look.
     private float _yaw = -MathHelper.PiOver2; // Start facing -Z (into the screen)

@@ -19,6 +19,9 @@ public class EntityItem
     /// <summary>Height offset from the floor surface to the icon centre.</summary>
     public const float HoverHeight = 0.3f;
 
+    /// <summary>Seconds after spawning before the item can be picked up.</summary>
+    public const float PickupDelay = 0.5f;
+
     private const float Gravity = -18f;
     private const float TerminalVelocity = -40f;
 
@@ -35,6 +38,9 @@ public class EntityItem
     /// <summary>Current spin angle in radians; advanced by <see cref="Update"/>.</summary>
     public float SpinAngle;
 
+    /// <summary>Time remaining before this item can be picked up (seconds).</summary>
+    public float PickupCooldown;
+
     // -------------------------------------------------------------------------
     // Construction
     // -------------------------------------------------------------------------
@@ -47,6 +53,7 @@ public class EntityItem
         Position = spawnPosition;
         Velocity = initialVelocity;
         SpinAngle = Random.Shared.NextSingle() * MathF.Tau; // random initial rotation
+        PickupCooldown = PickupDelay;
     }
 
     // -------------------------------------------------------------------------
@@ -56,6 +63,9 @@ public class EntityItem
     /// <summary>Integrates gravity, resolves block collisions, and advances the spin.</summary>
     public void Update(World world, float dt)
     {
+        if (PickupCooldown > 0f)
+            PickupCooldown -= dt;
+
         // --- Gravity ---
         Velocity.Y = MathF.Max(Velocity.Y + Gravity * dt, TerminalVelocity);
 

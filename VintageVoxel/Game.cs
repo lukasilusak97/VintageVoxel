@@ -4,6 +4,7 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
+using StbImageSharp;
 
 namespace VintageVoxel;
 
@@ -16,7 +17,11 @@ public class Game : GameWindow
     // OpenGL resource bundle for one chunk — managed GPU-side per loaded chunk.
     private readonly record struct ChunkGpu(int Vao, int Vbo, int Ebo, int IndexCount);
 
+    // OpenGL resource bundle for one model mesh — cached per item ID.
+    private readonly record struct ModelGpu(int Vao, int Vbo, int Ebo, int IndexCount, int TexHandle);
+
     private readonly Dictionary<Vector2i, ChunkGpu> _chunkGpuData = new();
+    private readonly Dictionary<int, ModelGpu> _modelGpu = new();
 
     private Shader _shader = null!;
     private Camera _camera = null!;
@@ -51,6 +56,10 @@ public class Game : GameWindow
     // --- Phase 18: Dropped item entities ---
     private readonly List<EntityItem> _entityItems = new();
     private EntityItemRenderer _entityRenderer = null!;
+
+    // --- Placed model blocks (torches, etc.) tracked outside the chunk mesh ---
+    // Keyed by world block position; value is a static entity used only for rendering.
+    private readonly Dictionary<Vector3i, EntityItem> _placedModels = new();
 
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
@@ -112,6 +121,10 @@ public class Game : GameWindow
         foreach (var key in initial)
             _chunkGpuData[key] = UploadChunk(_world.Chunks[key]);
 
+        // Scan initial chunks for any MODEL blocks saved to disk (e.g. placed torches).
+        foreach (var key in initial)
+            if (_world.Chunks.TryGetValue(key, out var ic)) ScanChunkForPlacedModels(ic);
+
         // -----------------------------------------------------------------------
         // Phase 9: Initialise ImGui backend, debug window and border renderer.
         // ImGuiController must be created after the GL context exists (OnLoad).
@@ -124,7 +137,9 @@ public class Game : GameWindow
         // Resolve relative to the executable directory so the path works regardless
         // of the working directory (project root vs. bin/Debug/net8.0 during debugging).
         ItemRegistry.Load(Path.Combine(AppContext.BaseDirectory, "Assets", "items.json"));
-        if (ItemRegistry.All.TryGetValue("torch", out var torch))
+        var torch = ItemRegistry.All.Values.FirstOrDefault(i =>
+            i.Name.Equals("torch", StringComparison.OrdinalIgnoreCase));
+        if (torch != null)
             _inventory.AddItem(torch, 1);
 
         // Phase 17: HUD renderer (crosshair + hotbar).
@@ -195,6 +210,110 @@ public class Game : GameWindow
     }
 
     /// <summary>
+    /// Uploads a <see cref="ModelMesh"/> to the GPU (once) and caches the result.
+    /// Returns the cached entry on subsequent calls for the same item ID.
+    /// </summary>
+    private ModelGpu GetOrCreateModelGpu(Item item)
+    {
+        if (_modelGpu.TryGetValue(item.Id, out var cached)) return cached;
+
+        var mesh = item.Mesh!;
+
+        int vao = GL.GenVertexArray();
+        GL.BindVertexArray(vao);
+
+        int vbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer,
+                      mesh.Vertices.Length * sizeof(float),
+                      mesh.Vertices, BufferUsageHint.StaticDraw);
+
+        int ebo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, ebo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer,
+                      mesh.Indices.Length * sizeof(uint),
+                      mesh.Indices, BufferUsageHint.StaticDraw);
+
+        // Same 7-float layout as the chunk shader.
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), 0);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 7 * sizeof(float), 3 * sizeof(float));
+        GL.EnableVertexAttribArray(1);
+        GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 5 * sizeof(float));
+        GL.EnableVertexAttribArray(2);
+        GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 6 * sizeof(float));
+        GL.EnableVertexAttribArray(3);
+
+        GL.BindVertexArray(0);
+
+        // Upload the model's own texture (PNG bytes decoded to RGBA).
+        int texHandle = 0;
+        if (mesh.TexturePng is { Length: > 0 } pngBytes)
+        {
+            ImageResult img = ImageResult.FromMemory(pngBytes, ColorComponents.RedGreenBlueAlpha);
+            int tex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, tex);
+            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+                          img.Width, img.Height, 0,
+                          PixelFormat.Rgba, PixelType.UnsignedByte, img.Data);
+            GL.TexParameter(TextureTarget.Texture2D,
+                TextureParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
+            GL.TexParameter(TextureTarget.Texture2D,
+                TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            GL.TexParameter(TextureTarget.Texture2D,
+                TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D,
+                TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
+            GL.BindTexture(TextureTarget.Texture2D, 0);
+            texHandle = tex;
+        }
+
+        var entry = new ModelGpu(vao, vbo, ebo, mesh.Indices.Length, texHandle);
+        _modelGpu[item.Id] = entry;
+        return entry;
+    }
+
+    /// <summary>
+    /// Renders all entries in <see cref="_placedModels"/> using their <see cref="ModelMesh"/>
+    /// geometry and per-model texture, then rebinds the atlas for subsequent draw calls.
+    /// </summary>
+    private void RenderPlacedModels()
+    {
+        GL.Disable(EnableCap.CullFace);
+
+        foreach (var (blockPos, entity) in _placedModels)
+        {
+            var item = entity.Item;
+            if (item.Mesh is null) continue; // fallback: skip items with no mesh
+
+            ModelGpu mg = GetOrCreateModelGpu(item);
+
+            // Temporarily bind the model's own texture (or fall back to atlas if none).
+            if (mg.TexHandle != 0)
+            {
+                GL.ActiveTexture(TextureUnit.Texture0);
+                GL.BindTexture(TextureTarget.Texture2D, mg.TexHandle);
+            }
+
+            // Minecraft model coords are 0-16; scale to one-block (0-1) world space.
+            var model = Matrix4.CreateScale(1f / 16f) *
+                        Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
+            _shader.SetMatrix4("model", ref model);
+
+            GL.BindVertexArray(mg.Vao);
+            GL.DrawElements(PrimitiveType.Triangles, mg.IndexCount,
+                            DrawElementsType.UnsignedInt, 0);
+        }
+
+        GL.BindVertexArray(0);
+        GL.Enable(EnableCap.CullFace);
+
+        // Rebind the atlas so the rest of the frame uses the correct texture.
+        _atlas.Use(TextureUnit.Texture0);
+    }
+
+    /// <summary>
     /// Re-meshes and re-uploads the chunk at <paramref name="key"/>, replacing any
     /// existing GPU data.  Does nothing if the chunk is not loaded.
     /// </summary>
@@ -226,6 +345,55 @@ public class Game : GameWindow
     }
 
     /// <summary>
+    /// Registers a MODEL-type block at <paramref name="blockPos"/> as a placed model
+    /// to be rendered each frame without physics or pickup.
+    /// </summary>
+    private void AddPlacedModel(Vector3i blockPos, Item item)
+    {
+        // Position so the icon centre lands at the block centre (accounting for HoverHeight).
+        var pos = new Vector3(blockPos.X + 0.5f,
+                              blockPos.Y + 0.5f - EntityItem.HoverHeight,
+                              blockPos.Z + 0.5f);
+        var entity = new EntityItem(item, 1, pos);
+        entity.SpinAngle = 0f;           // static — no spin
+        entity.PickupCooldown = float.MaxValue; // never picked up via proximity
+        _placedModels[blockPos] = entity;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="chunk"/> for transparent MODEL blocks and registers
+    /// each as a placed model.  Called after every initial or streamed chunk load.
+    /// </summary>
+    private void ScanChunkForPlacedModels(Chunk chunk)
+    {
+        for (int z = 0; z < Chunk.Size; z++)
+            for (int y = 0; y < Chunk.Size; y++)
+                for (int x = 0; x < Chunk.Size; x++)
+                {
+                    ref var block = ref chunk.GetBlock(x, y, z);
+                    if (block.IsEmpty || !block.IsTransparent) continue;
+                    var item = ItemRegistry.Get(block.Id);
+                    if (item?.Type != ItemType.Model) continue;
+                    int wx = chunk.Position.X * Chunk.Size + x;
+                    int wz = chunk.Position.Z * Chunk.Size + z;
+                    AddPlacedModel(new Vector3i(wx, y, wz), item);
+                }
+    }
+
+    /// <summary>
+    /// Spawns a 1-count dropped item entity at the centre of the broken block.
+    /// Does nothing if the block ID has no corresponding item in the registry.
+    /// </summary>
+    private void SpawnBlockDrop(ushort blockId, Vector3i blockPos)
+    {
+        var item = ItemRegistry.Get(blockId);
+        if (item == null) return;
+        var spawnPos = new Vector3(blockPos.X + 0.5f, blockPos.Y + 0.5f, blockPos.Z + 0.5f);
+        var impulse = new Vector3(0f, 3f, 0f);
+        _entityItems.Add(new EntityItem(item, 1, spawnPos, impulse));
+    }
+
+    /// <summary>
     /// Places the block represented by the currently held hotbar item at world
     /// position (wx, wy, wz).  If the hotbar is empty, falls back to Stone (ID 2).
     /// MODEL-type items are not placeable as voxel blocks and are silently ignored.
@@ -234,9 +402,16 @@ public class Game : GameWindow
     {
         ref var held = ref _inventory.HeldStack;
 
-        // MODEL items have no corresponding block ID — skip placement.
         if (!held.IsEmpty && held.Item!.Type == ItemType.Model)
+        {
+            // MODEL items are stored as transparent placeholder blocks so the chunk
+            // mesher skips them; the visual is provided by _placedModels rendering.
+            _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)held.Item.Id, IsTransparent = true });
+            LightEngine.UpdateAtBlock(wx, wy, wz, _world);
+            AddPlacedModel(new Vector3i(wx, wy, wz), held.Item);
+            RebuildAffectedChunks(wx, wy, wz);
             return;
+        }
 
         ushort id = held.IsEmpty ? (ushort)2 : (ushort)held.Item!.Id;
         _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
@@ -265,7 +440,8 @@ public class Game : GameWindow
         for (int i = _entityItems.Count - 1; i >= 0; i--)
         {
             _entityItems[i].Update(_world, dt);
-            if ((_camera.Position - _entityItems[i].Position).Length < EntityItem.PickupRadius)
+            if (_entityItems[i].PickupCooldown <= 0f &&
+                (_camera.FeetPosition - _entityItems[i].Position).Length < EntityItem.PickupRadius)
             {
                 _inventory.AddItem(_entityItems[i].Item, _entityItems[i].Count);
                 _entityItems.RemoveAt(i);
@@ -303,6 +479,14 @@ public class Game : GameWindow
 
         foreach (var key in removed)
         {
+            // Evict placed models that belong to the unloaded chunk.
+            int minX = key.X * Chunk.Size, maxX = (key.X + 1) * Chunk.Size;
+            int minZ = key.Y * Chunk.Size, maxZ = (key.Y + 1) * Chunk.Size;
+            foreach (var pos in _placedModels.Keys
+                .Where(p => p.X >= minX && p.X < maxX && p.Z >= minZ && p.Z < maxZ)
+                .ToList())
+                _placedModels.Remove(pos);
+
             if (_chunkGpuData.TryGetValue(key, out var gpu))
             {
                 DeleteChunkGpu(gpu);
@@ -346,6 +530,11 @@ public class Game : GameWindow
                     DeleteChunkGpu(old);
                 _chunkGpuData[key] = UploadChunk(chunk);
             }
+
+            // Scan newly added chunks for MODEL blocks loaded from disk.
+            foreach (var key in added)
+                if (_world.Chunks.TryGetValue(key, out var sc)) ScanChunkForPlacedModels(sc);
+
             _bordersDirty = true;
         }
     }
@@ -412,6 +601,10 @@ public class Game : GameWindow
 
         // --- Phase 18: Render dropped item entities (world-space, same shader) ---
         _entityRenderer.Render(_entityItems, _shader);
+
+        // Render statically placed MODEL blocks (torches, etc.) without physics/spin.
+        if (_placedModels.Count > 0)
+            RenderPlacedModels();
 
         // Restore fill mode before drawing debug overlays and ImGui.
         if (_debugWindow.WireframeMode)
@@ -484,6 +677,8 @@ public class Game : GameWindow
                         // If the last sub-voxel was removed, convert the container back to Air.
                         if (!chisel.HasAnyFilled())
                         {
+                            ushort chiseledId = _world.GetBlock(
+                                hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
                             _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z,
                                 Block.Air);
                             int cx = (int)MathF.Floor((float)hit.BlockPos.X / Chunk.Size);
@@ -495,13 +690,18 @@ public class Game : GameWindow
                                     hit.BlockPos.Z - cz * Chunk.Size));
                             LightEngine.UpdateAtBlock(
                                 hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
+                            SpawnBlockDrop(chiseledId, hit.BlockPos);
                         }
                     }
                 }
                 else
                 {
+                    ushort brokenId = _world.GetBlock(
+                        hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
                     _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
                     LightEngine.UpdateAtBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, _world);
+                    _placedModels.Remove(hit.BlockPos);
+                    SpawnBlockDrop(brokenId, hit.BlockPos);
                 }
                 RebuildAffectedChunks(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
             }
@@ -671,6 +871,15 @@ public class Game : GameWindow
         foreach (var gpu in _chunkGpuData.Values)
             DeleteChunkGpu(gpu);
         _chunkGpuData.Clear();
+
+        foreach (var mg in _modelGpu.Values)
+        {
+            GL.DeleteVertexArray(mg.Vao);
+            GL.DeleteBuffer(mg.Vbo);
+            GL.DeleteBuffer(mg.Ebo);
+            if (mg.TexHandle != 0) GL.DeleteTexture(mg.TexHandle);
+        }
+        _modelGpu.Clear();
 
         _atlas.Dispose();
         _shader.Dispose();

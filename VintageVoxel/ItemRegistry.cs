@@ -37,14 +37,17 @@ public static class ItemRegistry
                 : ItemType.Block;
 
             VoxelModel? model = null;
+            ModelMesh? mesh = null;
             if (itemType == ItemType.Model)
             {
                 string modelPath = Path.Combine(modelsDir, def.Name.ToLowerInvariant() + ".json");
-                ModelLoader.TryLoad(modelPath, out model);
+                // Try Minecraft/Blockbench element format first; fall back to VoxelModel format.
+                if (!MinecraftModelLoader.TryLoad(modelPath, out mesh))
+                    ModelLoader.TryLoad(modelPath, out model);
             }
 
             _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.TextureId,
-                                      itemType, model);
+                                      itemType, model, mesh);
         }
     }
 
