@@ -172,15 +172,8 @@ public sealed class HUDRenderer : IDisposable
                 : new Vector4(0.12f, 0.12f, 0.12f, 0.85f);
             DrawQuad(sx, y0, SlotSize, SlotSize, bgColor);
 
-            // Item icon — use the texture tile stored directly on the item.
-            var stack = inventory.Slots[i];
-            if (!stack.IsEmpty && stack.Item != null)
-            {
-                const float pad = 4f;
-                DrawAtlasTile(sx + pad, y0 + pad,
-                              SlotSize - pad * 2f, SlotSize - pad * 2f,
-                              stack.Item.TextureId);
-            }
+            // Item icons are rendered as 3-D mini-entities by Game.RenderHotbarItems3D
+            // (called immediately after this 2-D pass), so no 2-D icon is drawn here.
         }
     }
 

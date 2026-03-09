@@ -56,6 +56,8 @@ public class Game : GameWindow
     // --- Phase 18: Dropped item entities ---
     private readonly List<EntityItem> _entityItems = new();
     private EntityItemRenderer _entityRenderer = null!;
+    // Reusable 1-element array passed to EntityItemRenderer for hotbar previews.
+    private readonly EntityItem[] _hudSlot = new EntityItem[1];
 
     // --- Placed model blocks (torches, etc.) tracked outside the chunk mesh ---
     // Keyed by world block position; value is a static entity used only for rendering.
@@ -394,6 +396,78 @@ public class Game : GameWindow
     }
 
     /// <summary>
+    /// Renders each occupied hotbar slot as a spinning 3-D mini item by reusing
+    /// <see cref="EntityItemRenderer"/>.  A tiny GL viewport is set per slot so the
+    /// item fills only that region; depth test is disabled to avoid z-fighting with
+    /// the world geometry already in the depth buffer.
+    /// </summary>
+    private void RenderHotbarItems3D(int fbWidth, int fbHeight)
+    {
+        int count = Inventory.HotbarSize;
+        float totalWidth = count * HUDRenderer.SlotSize + (count - 1) * HUDRenderer.SlotGap;
+        float x0 = (fbWidth - totalWidth) * 0.5f;
+
+        // HUDRenderer uses a top-left-origin pixel space, OpenGL viewport uses bottom-left.
+        // HUD y0 (top-left) = fbHeight - HotbarBottomPad - SlotSize
+        // GL y0  (bot-left) = fbHeight - HUD_y0 - SlotSize = HotbarBottomPad
+        int glBaseY = HUDRenderer.HotbarBottomPad;
+        int slotPx = HUDRenderer.SlotSize;
+        const int pad = 4;
+        int innerSize = slotPx - pad * 2;
+
+        // Mini-view: tight perspective into a square slot.
+        var miniProj = Matrix4.CreatePerspectiveFieldOfView(
+            MathHelper.DegreesToRadians(40f), 1f, 0.01f, 20f);
+        // Isometric-ish camera: above and slightly in front, looking at the item centre.
+        var eye = new Vector3(0.6f, 0.5f, 1.0f);
+        var target = new Vector3(0f, 0.15f, 0f);
+        var miniView = Matrix4.LookAt(eye, target, Vector3.UnitY);
+
+        _shader.Use();
+        _atlas.Use(TextureUnit.Texture0);
+        _shader.SetInt("uTexture", 0);
+        _shader.SetInt("uNoTexture", 0);
+        _shader.SetMatrix4("projection", ref miniProj);
+        _shader.SetMatrix4("view", ref miniView);
+
+        GL.Disable(EnableCap.DepthTest);
+        GL.Disable(EnableCap.CullFace);
+        GL.Enable(EnableCap.ScissorTest);
+
+        Func<Item, (int Vao, int IndexCount, int TexHandle)?> gpuGetter = item =>
+        {
+            if (item.Mesh == null) return null;
+            var mg = GetOrCreateModelGpu(item);
+            return (mg.Vao, mg.IndexCount, mg.TexHandle);
+        };
+
+        for (int i = 0; i < count; i++)
+        {
+            var stack = _inventory.Slots[i];
+            if (stack.IsEmpty || stack.Item == null) continue;
+
+            int vx = (int)(x0 + i * (HUDRenderer.SlotSize + HUDRenderer.SlotGap)) + pad;
+            int vy = glBaseY + pad;
+
+            GL.Scissor(vx, vy, innerSize, innerSize);
+            GL.Viewport(vx, vy, innerSize, innerSize);
+
+            _hudSlot[0] = new EntityItem(stack.Item, stack.Count, Vector3.Zero)
+            {
+                SpinAngle = MathF.PI / 4f  // fixed 45° angle — no spin
+            };
+            _entityRenderer.Render(_hudSlot, _shader, _atlas.Handle, gpuGetter);
+        }
+
+        // Restore full-screen viewport and 3-D GL state.
+        GL.Disable(EnableCap.ScissorTest);
+        GL.Enable(EnableCap.DepthTest);
+        GL.Enable(EnableCap.CullFace);
+        GL.Viewport(0, 0, fbWidth, fbHeight);
+        _atlas.Use(TextureUnit.Texture0);
+    }
+
+    /// <summary>
     /// Places the block represented by the currently held hotbar item at world
     /// position (wx, wy, wz).  If the hotbar is empty, falls back to Stone (ID 2).
     /// MODEL-type items are not placeable as voxel blocks and are silently ignored.
@@ -427,16 +501,21 @@ public class Game : GameWindow
 
         // Feed input into ImGui every frame (keeps its state consistent whether
         // the overlay is visible or not).
+        Profiler.Begin("ImGui Update");
         _imgui.Update(this, dt);
+        Profiler.End("ImGui Update");
 
         // Physics, mouse look, and chunk streaming are gated on the Playing state.
         // When Paused or in the MainMenu the world is frozen.
         if (_gameState != GameState.Playing)
             return;
 
+        Profiler.Begin("Physics");
         _camera.PhysicsUpdate(_world, KeyboardState, dt);
+        Profiler.End("Physics");
 
         // --- Phase 18: Update dropped item entities + proximity pickup ---
+        Profiler.Begin("Entities");
         for (int i = _entityItems.Count - 1; i >= 0; i--)
         {
             _entityItems[i].Update(_world, dt);
@@ -447,6 +526,7 @@ public class Game : GameWindow
                 _entityItems.RemoveAt(i);
             }
         }
+        Profiler.End("Entities");
 
         // Mouse look: only active when cursor is grabbed (debug overlay closed).
         if (CursorState == CursorState.Grabbed)
@@ -475,8 +555,11 @@ public class Game : GameWindow
         // that moved out of range, and re-mesh new arrivals plus their neighbours
         // so cross-chunk seam faces are properly culled.
         // -----------------------------------------------------------------------
+        Profiler.Begin("Chunk Stream: World Update");
         _world.Update(_camera.Position, out var added, out var removed);
+        Profiler.End("Chunk Stream: World Update");
 
+        Profiler.Begin("Chunk Stream: Unload");
         foreach (var key in removed)
         {
             // Evict placed models that belong to the unloaded chunk.
@@ -494,23 +577,28 @@ public class Game : GameWindow
             }
         }
         if (removed.Count > 0) _bordersDirty = true;
+        Profiler.End("Chunk Stream: Unload");
 
         if (added.Count > 0)
         {
             // Phase 14: replace freshly-generated streaming chunks with saved data.
+            Profiler.Begin("Chunk Stream: Disk Load");
             foreach (var key in added)
             {
                 if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
                     _world.ReplaceChunk(key, saved);
             }
+            Profiler.End("Chunk Stream: Disk Load");
 
             // Compute lighting for the new chunks plus their immediate neighbours
             // (seam-accurate BFS needs the neighbour data available first).
+            Profiler.Begin("Chunk Stream: Lighting");
             foreach (var key in added)
             {
                 if (_world.Chunks.TryGetValue(key, out var newChunk))
                     LightEngine.ComputeChunk(newChunk, _world);
             }
+            Profiler.End("Chunk Stream: Lighting");
 
             // Include the four cardinal neighbours of each new chunk so their
             // boundary faces (previously exposed toward the empty slot) get re-culled.
@@ -523,6 +611,7 @@ public class Game : GameWindow
                 toRebuild.Add(new Vector2i(key.X, key.Y + 1));
             }
 
+            Profiler.Begin("Chunk Stream: Mesh Upload");
             foreach (var key in toRebuild)
             {
                 if (!_world.Chunks.TryGetValue(key, out var chunk)) continue;
@@ -530,6 +619,7 @@ public class Game : GameWindow
                     DeleteChunkGpu(old);
                 _chunkGpuData[key] = UploadChunk(chunk);
             }
+            Profiler.End("Chunk Stream: Mesh Upload");
 
             // Scan newly added chunks for MODEL blocks loaded from disk.
             foreach (var key in added)
@@ -543,7 +633,9 @@ public class Game : GameWindow
     {
         base.OnRenderFrame(args);
 
+        Profiler.Begin("GL Clear");
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        Profiler.End("GL Clear");
 
         // --- Apply debug render-mode toggles ---
         if (_debugWindow.WireframeMode)
@@ -571,26 +663,23 @@ public class Game : GameWindow
         var frustum = Frustum.FromViewProjection(view, projection);
 
         // Draw each loaded chunk with its own world-space translation matrix.
+        // key.X = chunk X, key.Y = chunk Z (no need to look up the Chunk object).
+        Profiler.Begin("Chunk Draw");
         foreach (var (key, gpu) in _chunkGpuData)
         {
             if (gpu.IndexCount == 0) continue; // All-air chunk — nothing to submit.
 
-            if (!_world.Chunks.TryGetValue(key, out var chunk)) continue;
-
             // --- Phase 12: Frustum Culling ---
             // Each chunk occupies a Chunk.Size³ AABB.  Test it against the six
             // frustum planes before issuing the draw call.
-            int wx = chunk.Position.X * Chunk.Size;
-            int wz = chunk.Position.Z * Chunk.Size;
+            int wx = key.X * Chunk.Size;
+            int wz = key.Y * Chunk.Size;
             if (!frustum.ContainsAabb(
                     new Vector3(wx, 0f, wz),
                     new Vector3(wx + Chunk.Size, Chunk.Size, wz + Chunk.Size)))
                 continue;
 
-            var model = Matrix4.CreateTranslation(
-                chunk.Position.X * Chunk.Size,
-                0f,
-                chunk.Position.Z * Chunk.Size);
+            var model = Matrix4.CreateTranslation(wx, 0f, wz);
             _shader.SetMatrix4("model", ref model);
 
             GL.BindVertexArray(gpu.Vao);
@@ -598,13 +687,22 @@ public class Game : GameWindow
         }
 
         GL.BindVertexArray(0);
+        Profiler.End("Chunk Draw");
 
         // --- Phase 18: Render dropped item entities (world-space, same shader) ---
-        _entityRenderer.Render(_entityItems, _shader);
+        Profiler.Begin("Entity Render");
+        _entityRenderer.Render(_entityItems, _shader, _atlas.Handle,
+            item =>
+            {
+                if (item.Mesh == null) return null;
+                var mg = GetOrCreateModelGpu(item);
+                return (mg.Vao, mg.IndexCount, mg.TexHandle);
+            });
 
         // Render statically placed MODEL blocks (torches, etc.) without physics/spin.
         if (_placedModels.Count > 0)
             RenderPlacedModels();
+        Profiler.End("Entity Render");
 
         // Restore fill mode before drawing debug overlays and ImGui.
         if (_debugWindow.WireframeMode)
@@ -623,8 +721,15 @@ public class Game : GameWindow
         }
 
         // --- Phase 17: 2-D HUD (crosshair + hotbar) — Playing state only ---
+        Profiler.Begin("HUD");
         if (_gameState == GameState.Playing)
+        {
             _hud.Render(_inventory, _atlas, FramebufferSize.X, FramebufferSize.Y);
+            // Render hotbar item icons as 3-D spinning entities (same approach as world drops).
+            RenderHotbarItems3D(FramebufferSize.X, FramebufferSize.Y);
+            DrawHotbarCounts();
+        }
+        Profiler.End("HUD");
 
         // --- ImGui debug dashboard (Playing state only) ---
         if (_debugVisible && _gameState == GameState.Playing)
@@ -646,9 +751,13 @@ public class Game : GameWindow
         else if (_gameState == GameState.Paused)
             DrawPauseMenu();
 
+        Profiler.Begin("ImGui");
         _imgui.Render(); // Render the ImGui frame (empty if overlay is hidden).
+        Profiler.End("ImGui");
 
+        Profiler.Begin("SwapBuffers");
         SwapBuffers();
+        Profiler.End("SwapBuffers");
     }
 
     protected override void OnMouseDown(MouseButtonEventArgs e)
@@ -915,6 +1024,40 @@ public class Game : GameWindow
         _gameState = GameState.Paused;
         CursorState = CursorState.Normal;
         _firstMove = true;
+    }
+
+    /// <summary>
+    /// Overlays the item-stack count in the bottom-right corner of each occupied hotbar slot.
+    /// Uses ImGui's foreground draw list so it composites on top of the OpenGL HUD pass.
+    /// </summary>
+    private void DrawHotbarCounts()
+    {
+        var drawList = ImGui.GetForegroundDrawList();
+        var displaySize = ImGui.GetIO().DisplaySize;
+
+        float slotSize = HUDRenderer.SlotSize;
+        float slotGap = HUDRenderer.SlotGap;
+        int slots = Inventory.HotbarSize;
+        float totalW = slots * slotSize + (slots - 1) * slotGap;
+        float x0 = (displaySize.X - totalW) * 0.5f;
+        float y0 = displaySize.Y - HUDRenderer.HotbarBottomPad - slotSize;
+        const float pad = 4f;
+
+        for (int i = 0; i < slots; i++)
+        {
+            var stack = _inventory.Slots[i];
+            if (stack.IsEmpty || stack.Count <= 1) continue;
+
+            string label = stack.Count.ToString();
+            var textSize = ImGui.CalcTextSize(label);
+            float tx = x0 + i * (slotSize + slotGap) + slotSize - pad - textSize.X;
+            float ty = y0 + slotSize - pad - textSize.Y;
+
+            // Drop shadow for readability against any background.
+            drawList.AddText(new System.Numerics.Vector2(tx + 1, ty + 1), 0xFF000000, label);
+            // Bright white count.
+            drawList.AddText(new System.Numerics.Vector2(tx, ty), 0xFFFFFFFF, label);
+        }
     }
 
     /// <summary>

@@ -85,19 +85,71 @@ public sealed class EntityItemRenderer : IDisposable
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Draws every entity in <paramref name="entities"/> as a spinning mini-cube.
-    /// The caller must have already bound the atlas texture and set view +
-    /// projection uniforms; only the per-entity model matrix changes here.
+    /// Draws every entity in <paramref name="entities"/> as a spinning mini representation.
+    /// Block items render as a mini cube using the atlas.
+    /// Model items render their actual <see cref="ModelMesh"/> when
+    /// <paramref name="modelGpuGetter"/> is provided and returns data.
+    /// <paramref name="atlasHandle"/> is the GL texture handle for the world atlas;
+    /// it is rebound automatically whenever the active texture needs to switch back.
     /// </summary>
-    public void Render(IReadOnlyList<EntityItem> entities, Shader shader)
+    public void Render(IReadOnlyList<EntityItem> entities, Shader shader,
+                       int atlasHandle,
+                       Func<Item, (int Vao, int IndexCount, int TexHandle)?>? modelGpuGetter = null)
     {
         if (entities.Count == 0) return;
 
-        GL.BindVertexArray(_vao);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        // Track which GL texture is currently bound so we only rebind on switches.
+        int currentTex = atlasHandle;
 
         foreach (var entity in entities)
         {
+            // --- MODEL items: render the actual mesh ---
+            if (entity.Item.Type == ItemType.Model && modelGpuGetter != null)
+            {
+                var gpuData = modelGpuGetter(entity.Item);
+                if (gpuData.HasValue)
+                {
+                    var (mVao, mIdxCount, mTexHandle) = gpuData.Value;
+
+                    if (mTexHandle != 0 && mTexHandle != currentTex)
+                    {
+                        GL.ActiveTexture(TextureUnit.Texture0);
+                        GL.BindTexture(TextureTarget.Texture2D, mTexHandle);
+                        currentTex = mTexHandle;
+                    }
+
+                    // Translate origin from Minecraft 0-16 centre → scale to block space → tilt → spin → world position.
+                    var model =
+                        Matrix4.CreateTranslation(-8f, -8f, -8f) *
+                        Matrix4.CreateScale(1f / 16f) *
+                        Matrix4.CreateRotationX(MathF.PI / 8f) *
+                        Matrix4.CreateRotationY(entity.SpinAngle) *
+                        Matrix4.CreateTranslation(entity.Position.X,
+                                                  entity.Position.Y + EntityItem.HoverHeight,
+                                                  entity.Position.Z);
+                    shader.SetMatrix4("model", ref model);
+
+                    GL.Disable(EnableCap.CullFace);
+                    GL.BindVertexArray(mVao);
+                    GL.DrawElements(PrimitiveType.Triangles, mIdxCount,
+                                    DrawElementsType.UnsignedInt, 0);
+                    GL.Enable(EnableCap.CullFace);
+                    continue;
+                }
+            }
+
+            // --- BLOCK items (and MODEL fallback): render as mini cube ---
+            // Ensure the atlas is bound — a previous MODEL entity may have swapped the texture.
+            if (currentTex != atlasHandle)
+            {
+                GL.ActiveTexture(TextureUnit.Texture0);
+                GL.BindTexture(TextureTarget.Texture2D, atlasHandle);
+                currentTex = atlasHandle;
+            }
+
+            GL.BindVertexArray(_vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+
             float u0 = entity.Item.TextureId * TextureAtlas.TileUvWidth;
             float u1 = u0 + TextureAtlas.TileUvWidth;
 
@@ -148,17 +200,24 @@ public sealed class EntityItemRenderer : IDisposable
                              _verts.Length * sizeof(float), _verts);
 
             // Scale → tilt → spin → translate to world position.
-            var model =
+            var blockModel =
                 Matrix4.CreateScale(0.35f) *
                 Matrix4.CreateRotationX(MathF.PI / 8f) *   // slight tilt so top face is visible
                 Matrix4.CreateRotationY(entity.SpinAngle) *
                 Matrix4.CreateTranslation(entity.Position.X,
                                           entity.Position.Y + EntityItem.HoverHeight,
                                           entity.Position.Z);
-            shader.SetMatrix4("model", ref model);
+            shader.SetMatrix4("model", ref blockModel);
 
             GL.DrawElements(PrimitiveType.Triangles, CubeIndices.Length,
                             DrawElementsType.UnsignedInt, 0);
+        }
+
+        // Always restore the atlas at the end so subsequent draw calls are unaffected.
+        if (currentTex != atlasHandle)
+        {
+            GL.ActiveTexture(TextureUnit.Texture0);
+            GL.BindTexture(TextureTarget.Texture2D, atlasHandle);
         }
 
         GL.BindVertexArray(0);

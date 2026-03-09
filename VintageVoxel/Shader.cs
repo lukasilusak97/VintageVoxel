@@ -13,6 +13,11 @@ public class Shader : IDisposable
     // The handle to the linked GPU program object.
     public readonly int Handle;
 
+    // Cache uniform locations so GL.GetUniformLocation is never called more than once
+    // per name. Without this cache every SetMatrix4/SetInt/etc. call hits the driver
+    // for a string lookup — 81+ times per frame just for the chunk model matrices.
+    private readonly Dictionary<string, int> _uniformCache = new();
+
     private bool _disposed = false;
 
     public Shader(string vertPath, string fragPath)
@@ -72,20 +77,30 @@ public class Shader : IDisposable
     // --- Uniform helpers ---
     // Uniforms are per-draw-call constants set from C# and read inside shader code.
 
+    private int Uniform(string name)
+    {
+        if (!_uniformCache.TryGetValue(name, out int loc))
+        {
+            loc = GL.GetUniformLocation(Handle, name);
+            _uniformCache[name] = loc;
+        }
+        return loc;
+    }
+
     public void SetInt(string name, int value)
-        => GL.Uniform1(GL.GetUniformLocation(Handle, name), value);
+        => GL.Uniform1(Uniform(name), value);
 
     public void SetFloat(string name, float value)
-        => GL.Uniform1(GL.GetUniformLocation(Handle, name), value);
+        => GL.Uniform1(Uniform(name), value);
 
     public void SetMatrix4(string name, ref Matrix4 matrix)
-        => GL.UniformMatrix4(GL.GetUniformLocation(Handle, name), false, ref matrix);
+        => GL.UniformMatrix4(Uniform(name), false, ref matrix);
 
     public void SetVector3(string name, Vector3 value)
-        => GL.Uniform3(GL.GetUniformLocation(Handle, name), value);
+        => GL.Uniform3(Uniform(name), value);
 
     public void SetVector4(string name, Vector4 value)
-        => GL.Uniform4(GL.GetUniformLocation(Handle, name), value);
+        => GL.Uniform4(Uniform(name), value);
 
     // --- IDisposable ---
     // OpenGL objects live on the GPU; we must delete them explicitly when done.
