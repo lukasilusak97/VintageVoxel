@@ -48,6 +48,10 @@ public class Game : GameWindow
     // --- Phase 17: HUD ---
     private HUDRenderer _hud = null!;
 
+    // --- Phase 18: Dropped item entities ---
+    private readonly List<EntityItem> _entityItems = new();
+    private EntityItemRenderer _entityRenderer = null!;
+
     // Track whether the mouse is captured for FPS look.
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -120,13 +124,16 @@ public class Game : GameWindow
         // Resolve relative to the executable directory so the path works regardless
         // of the working directory (project root vs. bin/Debug/net8.0 during debugging).
         ItemRegistry.Load(Path.Combine(AppContext.BaseDirectory, "Assets", "items.json"));
-        foreach (var item in ItemRegistry.All.Values)
-            _inventory.AddItem(item, item.MaxStackSize);
+        if (ItemRegistry.All.TryGetValue("torch", out var torch))
+            _inventory.AddItem(torch, 1);
 
         // Phase 17: HUD renderer (crosshair + hotbar).
         // Use FramebufferSize (physical pixels) rather than ClientSize/Size so the
         // ortho projection matches the actual GL viewport on HiDPI displays.
         _hud = new HUDRenderer(FramebufferSize.X, FramebufferSize.Y);
+
+        // Phase 18: renderer for dropped item entities.
+        _entityRenderer = new EntityItemRenderer();
     }
 
     // -------------------------------------------------------------------------
@@ -253,6 +260,17 @@ public class Game : GameWindow
             return;
 
         _camera.PhysicsUpdate(_world, KeyboardState, dt);
+
+        // --- Phase 18: Update dropped item entities + proximity pickup ---
+        for (int i = _entityItems.Count - 1; i >= 0; i--)
+        {
+            _entityItems[i].Update(_world, dt);
+            if ((_camera.Position - _entityItems[i].Position).Length < EntityItem.PickupRadius)
+            {
+                _inventory.AddItem(_entityItems[i].Item, _entityItems[i].Count);
+                _entityItems.RemoveAt(i);
+            }
+        }
 
         // Mouse look: only active when cursor is grabbed (debug overlay closed).
         if (CursorState == CursorState.Grabbed)
@@ -391,6 +409,9 @@ public class Game : GameWindow
         }
 
         GL.BindVertexArray(0);
+
+        // --- Phase 18: Render dropped item entities (world-space, same shader) ---
+        _entityRenderer.Render(_entityItems, _shader);
 
         // Restore fill mode before drawing debug overlays and ImGui.
         if (_debugWindow.WireframeMode)
@@ -588,6 +609,25 @@ public class Game : GameWindow
             int count = WorldPersistence.SaveAll(_savePath, _world);
             _lastSaveStatus = $"Saved {count} chunk(s) at {DateTime.Now:HH:mm:ss}";
         }
+
+        // Q — drop one item from the held stack into the world. Playing state only.
+        if (e.Key == Keys.Q && _gameState == GameState.Playing)
+        {
+            ref var held = ref _inventory.HeldStack;
+            if (!held.IsEmpty)
+            {
+                var dropItem = held.Item!;
+                int removed = _inventory.RemoveItem(dropItem, 1);
+                if (removed > 0)
+                {
+                    // Spawn the entity slightly in front of and above the camera
+                    // with a small forward+upward impulse so it arcs away.
+                    var spawnPos = _camera.Position + _camera.Front * 0.8f;
+                    var impulse = _camera.Front * 5f + new Vector3(0f, 2f, 0f);
+                    _entityItems.Add(new EntityItem(dropItem, removed, spawnPos, impulse));
+                }
+            }
+        }
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -636,6 +676,7 @@ public class Game : GameWindow
         _shader.Dispose();
         _borders.Dispose();
         _hud.Dispose();
+        _entityRenderer.Dispose();
         _imgui.Dispose();
     }
 

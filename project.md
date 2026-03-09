@@ -29,6 +29,7 @@
 | 15    | Game State Management (Menus)  | ✅ Done   |
 | 16    | Inventory Architecture         | ✅ Done   |
 | 17    | HUD (Heads-Up Display)         | ✅ Done   |
+| 18    | Item Interaction & Dropping    | ✅ Done   |
 
 ---
 
@@ -137,6 +138,23 @@
   - **F3 / F / Ctrl+S** key handlers gated to `Playing` state only — debug overlay, creative-mode toggle, and manual save are unavailable from menus
   - **Debug overlay** in `OnRenderFrame` also gated: `_debugVisible && _gameState == Playing`, so `DebugWindow.Draw` is never called from the frozen pause frame
   - World and chunks are fully loaded before the main menu is shown; the frozen world renders as a background behind both menus giving a Minecraft-style "world preview" feel
+- **Item Interaction & Dropping (Phase 18):**
+  - **`EntityItem`** (`EntityItem.cs`) — data + physics class for a dropped item in the world:
+    - `Item`, `Count`, `Position`, `Velocity`, `SpinAngle` fields
+    - `Update(world, dt)` — applies gravity (`-18 u/s²`, terminal `-40 u/s`), resolves per-axis block collisions, advances the Y-axis spin (half revolution per second)
+    - `PickupRadius = 1.5f` — constant used by `Game` for the collection sphere
+    - `HoverHeight = 0.3f` — visual offset so the icon floats above the block surface
+  - **`EntityItemRenderer`** (`EntityItemRenderer.cs`) — reuses the existing world `Shader` + atlas:
+    - Owns one VAO / dynamic VBO / static EBO; vertex layout exactly matches the chunk shader (7 floats: xyz uv light ao)
+    - Per entity: writes 4 vertices with the item's atlas tile UVs, light=1 / ao=1 (always full-bright), uploads via `BufferSubData`, sets the model matrix (`Scale(0.35) * RotateY(spinAngle) * Translate(pos + HoverHeight)`), issues one `DrawElements` call
+    - Disables back-face culling for the render pass so the spinning quad is visible from both sides
+  - **`Game` integration:**
+    - `_entityItems` (`List<EntityItem>`) — live list of all dropped entities
+    - `_entityRenderer` — initialised in `OnLoad` after the GL context is ready
+    - `OnUpdateFrame` — per-frame loop: calls `Update()` on each entity, then removes and collects any within `PickupRadius` of the camera (`_inventory.AddItem`)
+    - `OnRenderFrame` — `_entityRenderer.Render` called immediately after the chunk draw loop, before the HUD and ImGui passes
+    - **Q key** — drops 1 item from `_inventory.HeldStack`; spawns an `EntityItem` 0.8 units in front of the camera with a forward (5 u/s) + upward (2 u/s) impulse so it arcs away
+    - `_entityRenderer.Dispose()` called in `OnUnload`
 - **Persistence — Saving/Loading (Phase 14):**
   - **`WorldPersistence`** — new static class; handles all binary I/O for chunk data:
     - `DefaultSavePath` — `%AppData%\VintageVoxel\Saves\default`; created on demand
@@ -222,9 +240,12 @@ VintageVoxel/                    ← Solution root
     ├── DebugWindow.cs           # ImGui overlay: FPS/pos/chunk metrics + mode + toggles
     ├── ChunkBorderRenderer.cs   # GL_LINES AABB wireframe per chunk (line.vert/frag)
     ├── HUDRenderer.cs           # 2-D orthographic HUD: crosshair + hotbar slots + item icons
-    ├── Item.cs                  # Item class: Id, Name, MaxStackSize, TextureId; Dirt/Stone/Grass singletons
+    ├── Item.cs                  # Item class: Id, Name, MaxStackSize, TextureId, Type (Block/Model), Model
     ├── ItemStack.cs             # ItemStack struct: Item? + Count; IsEmpty; Empty sentinel
+    ├── ItemRegistry.cs          # Loads items.json; resolves VoxelModel for MODEL-type items
     ├── Inventory.cs             # 10-slot hotbar inventory; ScrollHotbar(); AddItem/RemoveItem/HasItem; HeldStack ref
+    ├── EntityItem.cs            # Dropped-item entity: position, velocity, gravity physics, spin, pickup radius
+    ├── EntityItemRenderer.cs    # Renders EntityItems as spinning atlas quads reusing the world shader
     └── Shaders/
         ├── shader.vert          # Vertex shader — MVP transform + passes UV, light, AO to fragment stage
         ├── shader.frag          # Fragment shader — atlas sample × (light × AO); uNoTexture=2 for AO+light greyscale debug
