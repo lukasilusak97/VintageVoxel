@@ -1,0 +1,6 @@
+[
+    { "id": 1, "name": "Dirt", "type": "BLOCK", "maxStackSize": 64, "textureId": 0 },
+    { "id": 2, "name": "Rock", "type": "BLOCK", "maxStackSize": 64, "textureId": 1 },
+    { "id": 3, "name": "Grass", "type": "BLOCK", "maxStackSize": 64, "textureId": 2 },
+    { "id": 4, "name": "Torch", "type": "MODEL", "maxStackSize": 16, "textureId": 3 }
+]

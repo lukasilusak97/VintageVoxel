@@ -116,10 +116,12 @@ public class Game : GameWindow
         _debugWindow = new DebugWindow();
         _borders = new ChunkBorderRenderer();
 
-        // Pre-seed the hotbar so the player has something to hold on first load.
-        _inventory.AddItem(Item.Grass, 64);
-        _inventory.AddItem(Item.Dirt, 64);
-        _inventory.AddItem(Item.Stone, 64);
+        // Pre-seed the hotbar from items.json so all registered items are available.
+        // Resolve relative to the executable directory so the path works regardless
+        // of the working directory (project root vs. bin/Debug/net8.0 during debugging).
+        ItemRegistry.Load(Path.Combine(AppContext.BaseDirectory, "Assets", "items.json"));
+        foreach (var item in ItemRegistry.All.Values)
+            _inventory.AddItem(item, item.MaxStackSize);
 
         // Phase 17: HUD renderer (crosshair + hotbar).
         // Use FramebufferSize (physical pixels) rather than ClientSize/Size so the
@@ -219,10 +221,16 @@ public class Game : GameWindow
     /// <summary>
     /// Places the block represented by the currently held hotbar item at world
     /// position (wx, wy, wz).  If the hotbar is empty, falls back to Stone (ID 2).
+    /// MODEL-type items are not placeable as voxel blocks and are silently ignored.
     /// </summary>
     private void PlaceHeldBlock(int wx, int wy, int wz)
     {
         ref var held = ref _inventory.HeldStack;
+
+        // MODEL items have no corresponding block ID — skip placement.
+        if (!held.IsEmpty && held.Item!.Type == ItemType.Model)
+            return;
+
         ushort id = held.IsEmpty ? (ushort)2 : (ushort)held.Item!.Id;
         _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
         LightEngine.UpdateAtBlock(wx, wy, wz, _world);

@@ -9,6 +9,7 @@ namespace VintageVoxel;
 ///   Tile 0 — Dirt   (warm brown)
 ///   Tile 1 — Stone  (cool gray)
 ///   Tile 2 — Grass top (green)
+///   Tile 3 — Torch  (warm orange/yellow)
 ///
 /// WHY procedural instead of loading a .png?
 ///   Avoids a runtime file dependency and keeps the project self-contained for now.
@@ -18,8 +19,8 @@ namespace VintageVoxel;
 public static class TextureAtlas
 {
     public const int TileSize = 16;
-    public const int TileCount = 3;
-    public const int Width = TileSize * TileCount; // 48 px
+    public const int TileCount = 4;
+    public const int Width = TileSize * TileCount; // 64 px
     public const int Height = TileSize;             // 16 px
 
     /// <summary>UV width of a single tile in normalised [0, 1] space.</summary>
@@ -58,6 +59,7 @@ public static class TextureAtlas
                     0 => DirtColor(px, py),
                     1 => StoneColor(px, py),
                     2 => GrassTopColor(px, py),
+                    3 => TorchColor(px, py),
                     _ => ((byte)255, (byte)0, (byte)255), // Magenta = missing tile
                 };
 
@@ -98,6 +100,27 @@ public static class TextureAtlas
         byte g = Clamp(124 + Vary(h >> 4, 20));
         byte b = Clamp(36 + Vary(h >> 9, 8));
         return (r, g, b);
+    }
+
+    private static (byte r, byte g, byte b) TorchColor(int px, int py)
+    {
+        int h = Hash(px, py);
+        // Warm orange-yellow flame with a dark brown stick at the bottom.
+        bool isStick = py > TileSize / 2;
+        if (isStick)
+        {
+            // Dark brown stick
+            byte r = Clamp(100 + Vary(h, 10));
+            byte g = Clamp(65 + Vary(h >> 4, 10));
+            byte b = Clamp(20 + Vary(h >> 8, 6));
+            return (r, g, b);
+        }
+        // Flame: bright orange fading to yellow toward the tip
+        float t = 1f - py / (TileSize * 0.5f); // 0 at midpoint, 1 at top
+        byte fr = Clamp((int)(220 + Vary(h, 20)));
+        byte fg = Clamp((int)(120 + t * 80 + Vary(h >> 3, 20)));
+        byte fb = Clamp((int)(0 + Vary(h >> 7, 15)));
+        return (fr, fg, fb);
     }
 
     // ------------------------------------------------------------------

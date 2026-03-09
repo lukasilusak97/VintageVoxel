@@ -172,15 +172,14 @@ public sealed class HUDRenderer : IDisposable
                 : new Vector4(0.12f, 0.12f, 0.12f, 0.85f);
             DrawQuad(sx, y0, SlotSize, SlotSize, bgColor);
 
-            // Item icon — use the block's top-face atlas tile.
+            // Item icon — use the texture tile stored directly on the item.
             var stack = inventory.Slots[i];
             if (!stack.IsEmpty && stack.Item != null)
             {
-                int tile = BlockRegistry.TileForFace((ushort)stack.Item.Id, 0);
                 const float pad = 4f;
                 DrawAtlasTile(sx + pad, y0 + pad,
                               SlotSize - pad * 2f, SlotSize - pad * 2f,
-                              tile);
+                              stack.Item.TextureId);
             }
         }
     }

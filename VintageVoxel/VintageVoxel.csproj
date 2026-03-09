@@ -47,4 +47,13 @@
     </None>
   </ItemGroup>
 
+  <!-- Copy shared Assets (models, textures, item database, etc.) to the output
+       directory so they're found at runtime via relative paths like "Assets/items.json". -->
+  <ItemGroup>
+    <None Include="..\Assets\**">
+      <Link>Assets\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

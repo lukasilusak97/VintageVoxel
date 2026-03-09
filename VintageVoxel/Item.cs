@@ -1,5 +1,14 @@
 namespace VintageVoxel;
 
+/// <summary>Determines how an item is represented in the world and inventory.</summary>
+public enum ItemType
+{
+    /// <summary>Placed as a full voxel block; icon comes from the texture atlas.</summary>
+    Block,
+    /// <summary>Uses a voxel JSON model for both in-world and inventory rendering.</summary>
+    Model,
+}
+
 /// <summary>
 /// Defines the static (shared) properties of a single item type.
 /// All instances with the same ID are the same logical item.
@@ -17,28 +26,27 @@ public class Item
 
     /// <summary>
     /// Index of the atlas tile used to render this item's 2-D icon.
-    /// Matches the tile indices produced by <see cref="BlockRegistry"/>.
+    /// Only meaningful when <see cref="Type"/> is <see cref="ItemType.Block"/>.
     /// </summary>
     public int TextureId { get; }
 
-    public Item(int id, string name, int maxStackSize, int textureId)
+    /// <summary>Whether this item is a placed block or a stand-alone model.</summary>
+    public ItemType Type { get; }
+
+    /// <summary>
+    /// Loaded voxel model for <see cref="ItemType.Model"/> items.
+    /// <see langword="null"/> for <see cref="ItemType.Block"/> items.
+    /// </summary>
+    public VoxelModel? Model { get; }
+
+    public Item(int id, string name, int maxStackSize, int textureId,
+                ItemType type = ItemType.Block, VoxelModel? model = null)
     {
         Id = id;
         Name = name;
         MaxStackSize = maxStackSize;
         TextureId = textureId;
+        Type = type;
+        Model = model;
     }
-
-    // -------------------------------------------------------------------------
-    // Pre-defined block items — created once and shared by reference.
-    // -------------------------------------------------------------------------
-
-    /// <summary>A Dirt block as a holdable/placeable item.</summary>
-    public static readonly Item Dirt = new(1, "Dirt", 64, 0);   // atlas tile 0
-
-    /// <summary>A Stone block as a holdable/placeable item.</summary>
-    public static readonly Item Stone = new(2, "Stone", 64, 3);  // atlas tile 3
-
-    /// <summary>A Grass block as a holdable/placeable item.</summary>
-    public static readonly Item Grass = new(3, "Grass", 64, 6);  // atlas tile 6 (top face)
 }
