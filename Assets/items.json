@@ -1,6 +1,6 @@
 [
-    { "id": 1, "name": "Dirt", "type": "BLOCK", "maxStackSize": 64, "textureId": 0 },
-    { "id": 2, "name": "Rock", "type": "BLOCK", "maxStackSize": 64, "textureId": 1 },
-    { "id": 3, "name": "Grass", "type": "BLOCK", "maxStackSize": 64, "textureId": 2 },
-    { "id": 4, "name": "Torch", "type": "MODEL", "maxStackSize": 16, "textureId": 3 }
+    { "id": 1, "name": "Dirt", "maxStackSize": 64, "blockId": 1 },
+    { "id": 2, "name": "Stone", "maxStackSize": 64, "blockId": 2 },
+    { "id": 3, "name": "Grass", "maxStackSize": 64, "blockId": 3 },
+    { "id": 4, "name": "Torch", "maxStackSize": 16, "blockId": 4, "model": "torch" }
 ]

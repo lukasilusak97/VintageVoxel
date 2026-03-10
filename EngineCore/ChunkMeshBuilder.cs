@@ -129,7 +129,7 @@ public static class ChunkMeshBuilder
                 for (int x = 0; x < Chunk.Size; x++)
                 {
                     ref Block block = ref chunk.GetBlock(x, y, z);
-                    if (block.IsTransparent)
+                    if (block.Id == 0) // skip air only; transparent non-air blocks (leaves, water, glass) are meshed below
                         continue;
 
                     // Phase 13: chiseled blocks are meshed at sub-voxel granularity.
@@ -149,14 +149,22 @@ public static class ChunkMeshBuilder
                         bool exposed;
                         if (Chunk.InBounds(nx, ny, nz))
                         {
-                            exposed = chunk.GetBlock(nx, ny, nz).IsTransparent;
+                            Block nb = chunk.GetBlock(nx, ny, nz);
+                            // Transparent blocks only emit faces toward air or different block types
+                            // to suppress internal leaf-leaf and water-water faces.
+                            exposed = block.IsTransparent
+                                ? nb.Id == 0
+                                : nb.IsTransparent;
                         }
                         else if (world != null)
                         {
                             int worldX = chunk.Position.X * Chunk.Size + nx;
                             int worldY = chunk.Position.Y * Chunk.Size + ny;
                             int worldZ = chunk.Position.Z * Chunk.Size + nz;
-                            exposed = world.GetBlock(worldX, worldY, worldZ).IsTransparent;
+                            Block nb = world.GetBlock(worldX, worldY, worldZ);
+                            exposed = block.IsTransparent
+                                ? nb.Id == 0
+                                : nb.IsTransparent;
                         }
                         else
                         {

@@ -37,7 +37,6 @@ public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
     private const byte Version = 1;
-    private const int SubVolume = ChiseledBlockData.SubSize * ChiseledBlockData.SubSize * ChiseledBlockData.SubSize; // 4096
 
     /// <summary>
     /// Default save folder: <c>%AppData%\VintageVoxel\Saves\default</c>.
@@ -167,88 +166,21 @@ public static class WorldPersistence
     // RLE helpers — blocks
     // -------------------------------------------------------------------------
 
-    private static void WriteBlockRle(BinaryWriter bw, Chunk chunk)
-    {
-        // Scan the flat block array and accumulate (id, runLength) pairs.
-        // WHY collect first? We need the entry count before the entries themselves.
-        var runs = new List<(ushort id, ushort count)>(64);
-        int i = 0;
-        while (i < Chunk.Volume)
-        {
-            ushort id = chunk.GetRawBlockId(i);
-            int run = 1;
-            // Merge as many identical neighbours as fit in a ushort run length.
-            while (i + run < Chunk.Volume &&
-                   chunk.GetRawBlockId(i + run) == id &&
-                   run < ushort.MaxValue)
-                run++;
-            runs.Add((id, (ushort)run));
-            i += run;
-        }
+    private static void WriteBlockRle(BinaryWriter bw, Chunk chunk) =>
+        RleCodec.WriteUshort(bw, i => chunk.GetRawBlockId(i), Chunk.Volume);
 
-        bw.Write(runs.Count);
-        foreach (var (id, count) in runs)
-        {
-            bw.Write(id);    // ushort
-            bw.Write(count); // ushort
-        }
-    }
-
-    private static ushort[] ReadBlockRle(BinaryReader br)
-    {
-        int entryCount = br.ReadInt32();
-        var ids = new ushort[Chunk.Volume];
-        int pos = 0;
-        for (int e = 0; e < entryCount; e++)
-        {
-            ushort id = br.ReadUInt16();
-            ushort count = br.ReadUInt16();
-            for (int j = 0; j < count && pos < Chunk.Volume; j++)
-                ids[pos++] = id;
-        }
-        return ids;
-    }
+    private static ushort[] ReadBlockRle(BinaryReader br) =>
+        RleCodec.ReadUshort(br, Chunk.Volume);
 
     // -------------------------------------------------------------------------
     // RLE helpers — sub-voxels
     // -------------------------------------------------------------------------
 
-    private static void WriteSubVoxelRle(BinaryWriter bw, ChiseledBlockData chisel)
-    {
-        var runs = new List<(bool filled, ushort count)>(32);
-        int i = 0;
-        while (i < SubVolume)
-        {
-            bool val = chisel.GetRaw(i);
-            int run = 1;
-            while (i + run < SubVolume && chisel.GetRaw(i + run) == val && run < ushort.MaxValue)
-                run++;
-            runs.Add((val, (ushort)run));
-            i += run;
-        }
+    private static void WriteSubVoxelRle(BinaryWriter bw, ChiseledBlockData chisel) =>
+        RleCodec.WriteBool(bw, i => chisel.GetRaw(i), ChiseledBlockData.SubVolume);
 
-        bw.Write(runs.Count);
-        foreach (var (filled, count) in runs)
-        {
-            bw.Write((byte)(filled ? 1 : 0)); // bool as byte
-            bw.Write(count);                  // ushort
-        }
-    }
-
-    private static void ReadSubVoxelRle(BinaryReader br, ChiseledBlockData chisel)
-    {
-        // The chisel was created with all sub-voxels = true (constructor default).
-        // The RLE covers all SubVolume positions, so every cell will be overwritten.
-        int entryCount = br.ReadInt32();
-        int pos = 0;
-        for (int e = 0; e < entryCount; e++)
-        {
-            bool val = br.ReadByte() != 0;
-            ushort count = br.ReadUInt16();
-            for (int j = 0; j < count && pos < SubVolume; j++)
-                chisel.SetRaw(pos++, val);
-        }
-    }
+    private static void ReadSubVoxelRle(BinaryReader br, ChiseledBlockData chisel) =>
+        RleCodec.ReadBool(br, (i, v) => chisel.SetRaw(i, v), ChiseledBlockData.SubVolume);
 
     // -------------------------------------------------------------------------
     // Utility

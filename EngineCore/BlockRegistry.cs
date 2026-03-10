@@ -1,7 +1,10 @@
+using System.Text.Json;
+
 namespace VintageVoxel;
 
 /// <summary>
-/// Maps block IDs to their texture atlas tile indices per face.
+/// Maps block IDs to texture atlas tile indices and block properties.
+/// Must be initialised at startup via <see cref="Load"/> then <see cref="Initialize"/>.
 ///
 /// WHY keep this outside the Block struct?
 ///   Block is stored 32 768 times per chunk.  Adding tile-index fields would blow
@@ -10,44 +13,133 @@ namespace VintageVoxel;
 /// </summary>
 public static class BlockRegistry
 {
-    /// <summary>Atlas tile indices for each face group of a block type.</summary>
-    public readonly struct FaceTiles
-    {
-        public readonly int Top;    // +Y face
-        public readonly int Bottom; // -Y face
-        public readonly int Side;   // All four side faces (N / S / E / W)
+    // face index → int[6] atlas tile index, indexed by block ID
+    private static int[][] _faceTiles = Array.Empty<int[]>();
+    private static BlockDef[] _defs = Array.Empty<BlockDef>();
 
-        public FaceTiles(int top, int bottom, int side)
+    // ------------------------------------------------------------------
+    // Loading
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Parses <paramref name="blocksJsonPath"/> and stores block definitions.
+    /// Call this before <see cref="GetAllTextureNames"/> and <see cref="Initialize"/>.
+    /// </summary>
+    public static void Load(string blocksJsonPath)
+    {
+        string json = File.ReadAllText(blocksJsonPath);
+        var options = new JsonSerializerOptions
         {
-            Top = top;
-            Bottom = bottom;
-            Side = side;
+            PropertyNameCaseInsensitive = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+        };
+        _defs = JsonSerializer.Deserialize<BlockDef[]>(json, options)
+            ?? throw new InvalidDataException($"Failed to parse {blocksJsonPath}");
+    }
+
+    /// <summary>
+    /// Returns the ordered, deduplicated list of texture names referenced by all loaded
+    /// block definitions.  Pass this to <see cref="TextureAtlas.Build"/> to get the
+    /// <c>nameToIndex</c> map required by <see cref="Initialize"/>.
+    /// </summary>
+    public static IReadOnlyList<string> GetAllTextureNames()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+
+        foreach (var def in _defs)
+        {
+            for (int face = 0; face < 6; face++)
+            {
+                string tex = def.TextureForFace(face);
+                if (!string.IsNullOrEmpty(tex) && seen.Add(tex))
+                    names.Add(tex);
+            }
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Returns a map from texture name to tint color (R,G,B bytes) for every
+    /// block definition that declares a "tint" hex color.  Used by
+    /// <see cref="TextureAtlas.Build"/> to multiply pixels at atlas-build time.
+    /// </summary>
+    public static Dictionary<string, (byte R, byte G, byte B)> GetTextureTints()
+    {
+        var result = new Dictionary<string, (byte, byte, byte)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in _defs)
+        {
+            if (string.IsNullOrEmpty(def.Tint)) continue;
+            string hex = def.Tint!.TrimStart('#');
+            if (hex.Length < 6) continue;
+            byte r = Convert.ToByte(hex.Substring(0, 2), 16);
+            byte g = Convert.ToByte(hex.Substring(2, 2), 16);
+            byte b = Convert.ToByte(hex.Substring(4, 2), 16);
+            for (int face = 0; face < 6; face++)
+            {
+                string tex = def.TextureForFace(face);
+                if (!string.IsNullOrEmpty(tex))
+                    result[tex] = (r, g, b);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Builds the internal face-tile lookup table.  Must be called after
+    /// <see cref="TextureAtlas.Build"/> has produced the <paramref name="nameToIndex"/> map.
+    /// </summary>
+    public static void Initialize(Dictionary<string, int> nameToIndex)
+    {
+        int maxId = 0;
+        foreach (var def in _defs)
+            if (def.Id > maxId) maxId = def.Id;
+
+        // Allocate slots 0..maxId.  ID 0 = Air (never rendered, all tiles 0).
+        _faceTiles = new int[maxId + 1][];
+        for (int i = 0; i <= maxId; i++)
+            _faceTiles[i] = new int[6]; // default: tile 0 for every face
+
+        foreach (var def in _defs)
+        {
+            var tiles = new int[6];
+            for (int face = 0; face < 6; face++)
+            {
+                string tex = def.TextureForFace(face);
+                tiles[face] = !string.IsNullOrEmpty(tex) && nameToIndex.TryGetValue(tex, out int idx) ? idx : 0;
+            }
+            _faceTiles[def.Id] = tiles;
         }
     }
 
-    // Index = block ID.
-    // Tile indices match TextureAtlas: 0 = Dirt, 1 = Stone, 2 = Grass top.
-    private static readonly FaceTiles[] Definitions =
-    {
-        new FaceTiles(0, 0, 0), // ID 0  Air         (never rendered)
-        new FaceTiles(0, 0, 0), // ID 1  Dirt        (all faces = dirt tile)
-        new FaceTiles(1, 1, 1), // ID 2  Stone       (all faces = stone tile)
-        new FaceTiles(2, 0, 0), // ID 3  Grass       (top = grass, rest = dirt)
-    };
+    // ------------------------------------------------------------------
+    // Runtime lookups (called every frame by ChunkMeshBuilder)
+    // ------------------------------------------------------------------
 
-    /// <summary>Returns the tile index for a specific face of the given block ID.
-    /// face 0 = Top (+Y), face 1 = Bottom (-Y), faces 2-5 = Sides.</summary>
+    /// <summary>
+    /// Returns the atlas tile index for a specific face of the given block.
+    /// face 0=up(+Y), 1=down(-Y), 2=north(-Z), 3=south(+Z), 4=west(-X), 5=east(+X).
+    /// </summary>
     public static int TileForFace(ushort blockId, int face)
     {
-        var def = blockId < Definitions.Length
-            ? Definitions[blockId]
-            : Definitions[1]; // Unknown ID falls back to Dirt
+        if (blockId == 0 || blockId >= _faceTiles.Length) return 0;
+        return _faceTiles[blockId][face & 7];
+    }
 
-        return face switch
-        {
-            0 => def.Top,
-            1 => def.Bottom,
-            _ => def.Side,
-        };
+    /// <summary>Returns <see langword="true"/> if the block with the given ID is transparent.</summary>
+    public static bool IsTransparent(ushort blockId)
+    {
+        if (blockId == 0) return true;
+        foreach (var def in _defs)
+            if (def.Id == blockId) return def.Transparent;
+        return false;
+    }
+
+    /// <summary>Returns the display name of the block, or an empty string if not registered.</summary>
+    public static string GetName(ushort blockId)
+    {
+        foreach (var def in _defs)
+            if (def.Id == blockId) return def.Name;
+        return string.Empty;
     }
 }

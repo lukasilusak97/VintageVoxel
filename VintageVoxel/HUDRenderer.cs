@@ -1,5 +1,6 @@
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
+using VintageVoxel.Rendering;
 
 namespace VintageVoxel;
 
@@ -16,57 +17,33 @@ public sealed class HUDRenderer : IDisposable
 {
     // --- GPU resources ---
     private readonly Shader _shader;
-    private readonly int _vao;
-    private readonly int _vbo;  // Dynamic: 4 vertices re-uploaded each draw call.
-    private readonly int _ebo;  // Static:  6 indices for two-triangle quad (never changes).
+    private readonly GpuMesh _mesh;  // VAO + dynamic VBO + static EBO shared by every 2-D draw call.
+    private readonly GpuResourceManager _gpuResources;
 
     // Current orthographic projection (pixel-space, top-left origin).
     private Matrix4 _ortho;
     private int _screenWidth;
     private int _screenHeight;
 
-    // --- Layout constants (all in screen pixels) ---
-    public const int SlotSize = 50;   // Width and height of one hotbar slot.
-    public const int SlotGap = 4;    // Gap between adjacent slots.
-    public const int HotbarBottomPad = 6; // Distance from screen bottom to slot edge.
+    // --- Layout constants (all in screen pixels) — defined in GameConstants.Render ---
+    private static int SlotSize => GameConstants.Render.HotbarSlotSize;
+    private static int SlotGap => GameConstants.Render.HotbarSlotGap;
+    private static int HotbarBottomPad => GameConstants.Render.HotbarBottomPad;
 
     // Shared index data: two triangles forming a CCW quad.
     // Vertex order: top-left(0), top-right(1), bottom-right(2), bottom-left(3).
     private static readonly uint[] QuadIndices = { 0, 1, 2, 2, 3, 0 };
 
-    public HUDRenderer(int screenWidth, int screenHeight)
+    public HUDRenderer(GpuResourceManager gpuResources, int screenWidth, int screenHeight)
     {
+        _gpuResources = gpuResources;
         _shader = new Shader("Shaders/hud.vert", "Shaders/hud.frag");
         SetScreenSize(screenWidth, screenHeight);
 
         // One VAO/VBO pair shared by every 2-D draw call.
         // Vertices: 4 × (x, y, u, v) = 16 floats. Uploaded as DynamicDraw because
         // the quad rectangle changes with every call.
-        _vao = GL.GenVertexArray();
-        GL.BindVertexArray(_vao);
-
-        _vbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, 16 * sizeof(float), IntPtr.Zero,
-                      BufferUsageHint.DynamicDraw);
-
-        // Location 0 — position (2 floats, byte offset 0).
-        GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false,
-                               4 * sizeof(float), 0);
-        GL.EnableVertexAttribArray(0);
-
-        // Location 1 — texcoord (2 floats, byte offset 8).
-        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false,
-                               4 * sizeof(float), 2 * sizeof(float));
-        GL.EnableVertexAttribArray(1);
-
-        _ebo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer,
-                      QuadIndices.Length * sizeof(uint), QuadIndices,
-                      BufferUsageHint.StaticDraw);
-
-        GL.BindVertexArray(0);
+        _mesh = _gpuResources.AllocateDynamicMesh(16, QuadIndices, 4);
     }
 
     // -------------------------------------------------------------------------
@@ -216,11 +193,11 @@ public sealed class HUDRenderer : IDisposable
 
     private void UploadAndDraw(float[] verts, Vector4 color, bool useTexture)
     {
-        GL.BindVertexArray(_vao);
+        GL.BindVertexArray(_mesh.Vao);
 
         // Orphan-and-replace pattern: passing a new sub-data range invalidates the
         // old buffer contents, letting the driver pipeline the upload without stalling.
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _mesh.Vbo);
         GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero,
                          verts.Length * sizeof(float), verts);
 
@@ -237,9 +214,7 @@ public sealed class HUDRenderer : IDisposable
 
     public void Dispose()
     {
-        GL.DeleteVertexArray(_vao);
-        GL.DeleteBuffer(_vbo);
-        GL.DeleteBuffer(_ebo);
+        _gpuResources.Free(_mesh);
         _shader.Dispose();
     }
 }

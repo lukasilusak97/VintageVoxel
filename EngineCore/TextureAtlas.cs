@@ -1,149 +1,129 @@
+using StbImageSharp;
+
 namespace VintageVoxel;
 
 /// <summary>
-/// Procedurally generates a texture atlas entirely in memory — no PNG files required.
+/// Builds a texture atlas by stitching 16×16 PNG tiles from disk into a horizontal strip.
 ///
-/// Layout: a horizontal strip of <see cref="TileCount"/> tiles, each
-/// <see cref="TileSize"/> x <see cref="TileSize"/> pixels, stored as RGBA bytes.
-///
-///   Tile 0 — Dirt   (warm brown)
-///   Tile 1 — Stone  (cool gray)
-///   Tile 2 — Grass top (green)
-///   Tile 3 — Torch  (warm orange/yellow)
-///
-/// WHY procedural instead of loading a .png?
-///   Avoids a runtime file dependency and keeps the project self-contained for now.
-///   The Texture class accepts raw RGBA bytes, so swapping in a file loader later
-///   (e.g. StbImageSharp) only changes this class, not the rest of the pipeline.
+/// Layout: <see cref="TileCount"/> tiles each <see cref="TileSize"/>×<see cref="TileSize"/>
+/// pixels wide, stored as RGBA bytes.  Call <see cref="Build"/> once at startup after
+/// <see cref="BlockRegistry.Load"/> has enumerated all required texture names.
 /// </summary>
 public static class TextureAtlas
 {
     public const int TileSize = 16;
-    public const int TileCount = 4;
-    public const int Width = TileSize * TileCount; // 64 px
-    public const int Height = TileSize;             // 16 px
 
-    /// <summary>UV width of a single tile in normalised [0, 1] space.</summary>
-    public static readonly float TileUvWidth = 1f / TileCount;
+    /// <summary>Number of tiles in the current atlas.  Set by <see cref="Build"/>.</summary>
+    public static int TileCount { get; private set; } = 1;
+
+    /// <summary>UV width of one tile in normalised [0, 1] space.  Set by <see cref="Build"/>.</summary>
+    public static float TileUvWidth { get; private set; } = 1f;
 
     /// <summary>
-    /// Generates all tiles, uploads the result to the GPU and returns a
-    /// ready-to-use <see cref="Texture"/>.
+    /// Loads each named PNG from <paramref name="textureDir"/>, stitches them into a
+    /// horizontal strip atlas, uploads it to the GPU and returns the <see cref="Texture"/>.
     /// </summary>
-    public static Texture Generate()
+    /// <param name="textureNames">Ordered list of texture names (without ".png" extension).</param>
+    /// <param name="textureDir">Directory that contains the PNG files.</param>
+    /// <param name="nameToIndex">Output map from texture name to tile index in the atlas.</param>
+    /// <param name="textureTints">Optional per-texture RGB tint multipliers (e.g. foliage color for leaves).</param>
+    public static Texture Build(
+        IReadOnlyList<string> textureNames,
+        string textureDir,
+        out Dictionary<string, int> nameToIndex,
+        Dictionary<string, (byte R, byte G, byte B)>? textureTints = null)
     {
-        // 4 bytes (RGBA) per pixel, Width x Height pixels.
-        byte[] pixels = new byte[Width * Height * 4];
+        TileCount = Math.Max(1, textureNames.Count);
+        TileUvWidth = 1f / TileCount;
+        nameToIndex = new Dictionary<string, int>(textureNames.Count, StringComparer.OrdinalIgnoreCase);
 
-        for (int tileIndex = 0; tileIndex < TileCount; tileIndex++)
-            PaintTile(pixels, tileIndex);
+        int atlasWidth = TileSize * TileCount;
+        int atlasHeight = TileSize;
+        byte[] pixels = new byte[atlasWidth * atlasHeight * 4];
 
-        return new Texture(Width, Height, pixels);
+        for (int i = 0; i < textureNames.Count; i++)
+        {
+            string name = textureNames[i];
+            nameToIndex[name] = i;
+
+            string path = Path.Combine(textureDir, name + ".png");
+            byte[] tilePixels = File.Exists(path)
+                ? LoadTile(path)
+                : MagentaTile();
+
+            if (textureTints != null && textureTints.TryGetValue(name, out var tint))
+                ApplyTint(tilePixels, tint.R, tint.G, tint.B);
+
+            BlitTile(pixels, tilePixels, i, atlasWidth);
+        }
+
+        return new Texture(atlasWidth, atlasHeight, pixels);
     }
 
     // ------------------------------------------------------------------
-    // Per-tile painters
+    // Private helpers
     // ------------------------------------------------------------------
 
-    private static void PaintTile(byte[] pixels, int tileIndex)
+    private static byte[] LoadTile(string path)
+    {
+        byte[] pngBytes = File.ReadAllBytes(path);
+        ImageResult img = ImageResult.FromMemory(pngBytes, ColorComponents.RedGreenBlueAlpha);
+
+        if (img.Width == TileSize && img.Height == TileSize)
+            return img.Data;
+
+        // Resize: sample nearest-neighbour into a 16×16 buffer.
+        byte[] resampled = new byte[TileSize * TileSize * 4];
+        for (int dy = 0; dy < TileSize; dy++)
+        {
+            int sy = dy * img.Height / TileSize;
+            for (int dx = 0; dx < TileSize; dx++)
+            {
+                int sx = dx * img.Width / TileSize;
+                int src = (sy * img.Width + sx) * 4;
+                int dst = (dy * TileSize + dx) * 4;
+                resampled[dst] = img.Data[src];
+                resampled[dst + 1] = img.Data[src + 1];
+                resampled[dst + 2] = img.Data[src + 2];
+                resampled[dst + 3] = img.Data[src + 3];
+            }
+        }
+        return resampled;
+    }
+
+    private static void ApplyTint(byte[] tile, byte r, byte g, byte b)
+    {
+        for (int i = 0; i < TileSize * TileSize; i++)
+        {
+            tile[i * 4 + 0] = (byte)(tile[i * 4 + 0] * r / 255);
+            tile[i * 4 + 1] = (byte)(tile[i * 4 + 1] * g / 255);
+            tile[i * 4 + 2] = (byte)(tile[i * 4 + 2] * b / 255);
+            // alpha channel unchanged
+        }
+    }
+
+    /// <summary>Magenta 16×16 tile — shown when a referenced texture file is missing.</summary>
+    private static byte[] MagentaTile()
+    {
+        byte[] t = new byte[TileSize * TileSize * 4];
+        for (int i = 0; i < TileSize * TileSize; i++)
+        {
+            t[i * 4] = 255; // R
+            t[i * 4 + 1] = 0;   // G
+            t[i * 4 + 2] = 255; // B
+            t[i * 4 + 3] = 255; // A
+        }
+        return t;
+    }
+
+    private static void BlitTile(byte[] atlas, byte[] tile, int tileIndex, int atlasWidth)
     {
         int xBase = tileIndex * TileSize;
-
         for (int py = 0; py < TileSize; py++)
-            for (int px = 0; px < TileSize; px++)
-            {
-                int dstIdx = ((py * Width) + (xBase + px)) * 4;
-
-                (byte r, byte g, byte b) = tileIndex switch
-                {
-                    0 => DirtColor(px, py),
-                    1 => StoneColor(px, py),
-                    2 => GrassTopColor(px, py),
-                    3 => TorchColor(px, py),
-                    _ => ((byte)255, (byte)0, (byte)255), // Magenta = missing tile
-                };
-
-                pixels[dstIdx + 0] = r;
-                pixels[dstIdx + 1] = g;
-                pixels[dstIdx + 2] = b;
-                pixels[dstIdx + 3] = 255; // Fully opaque
-            }
-    }
-
-    // ------------------------------------------------------------------
-    // Color recipes
-    // ------------------------------------------------------------------
-
-    private static (byte r, byte g, byte b) DirtColor(int px, int py)
-    {
-        int h = Hash(px, py);
-        // Warm brown base with ±16 variation per channel.
-        byte r = Clamp(135 + Vary(h, 16));
-        byte g = Clamp(88 + Vary(h >> 5, 16));
-        byte b = Clamp(40 + Vary(h >> 10, 8));
-        return (r, g, b);
-    }
-
-    private static (byte r, byte g, byte b) StoneColor(int px, int py)
-    {
-        int h = Hash(px, py);
-        // Neutral gray — same value for R/G/B, ±24 variation.
-        byte v = Clamp(118 + Vary(h, 24));
-        return (v, v, v);
-    }
-
-    private static (byte r, byte g, byte b) GrassTopColor(int px, int py)
-    {
-        int h = Hash(px, py);
-        // Muted green with ±20 variation on G, smaller on R/B.
-        byte r = Clamp(72 + Vary(h, 12));
-        byte g = Clamp(124 + Vary(h >> 4, 20));
-        byte b = Clamp(36 + Vary(h >> 9, 8));
-        return (r, g, b);
-    }
-
-    private static (byte r, byte g, byte b) TorchColor(int px, int py)
-    {
-        int h = Hash(px, py);
-        // Warm orange-yellow flame with a dark brown stick at the bottom.
-        bool isStick = py > TileSize / 2;
-        if (isStick)
         {
-            // Dark brown stick
-            byte r = Clamp(100 + Vary(h, 10));
-            byte g = Clamp(65 + Vary(h >> 4, 10));
-            byte b = Clamp(20 + Vary(h >> 8, 6));
-            return (r, g, b);
-        }
-        // Flame: bright orange fading to yellow toward the tip
-        float t = 1f - py / (TileSize * 0.5f); // 0 at midpoint, 1 at top
-        byte fr = Clamp((int)(220 + Vary(h, 20)));
-        byte fg = Clamp((int)(120 + t * 80 + Vary(h >> 3, 20)));
-        byte fb = Clamp((int)(0 + Vary(h >> 7, 15)));
-        return (fr, fg, fb);
-    }
-
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Integer hash — mixes two pixel coordinates into a pseudo-random scalar.
-    /// No allocations; deterministic so the same pixel always gets the same colour.
-    /// </summary>
-    private static int Hash(int x, int y)
-    {
-        unchecked
-        {
-            int h = x * 374761393 + y * 668265263;
-            h = (h ^ (h >> 13)) * 1274126177;
-            return h ^ (h >> 16);
+            int srcRow = py * TileSize * 4;
+            int dstRow = (py * atlasWidth + xBase) * 4;
+            Array.Copy(tile, srcRow, atlas, dstRow, TileSize * 4);
         }
     }
-
-    /// <summary>Maps the low bits of <paramref name="h"/> to [-amplitude, +amplitude].</summary>
-    private static int Vary(int h, int amplitude) =>
-        (h & (amplitude * 2 - 1)) - amplitude;
-
-    private static byte Clamp(int v) => (byte)Math.Clamp(v, 0, 255);
 }

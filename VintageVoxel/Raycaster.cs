@@ -97,66 +97,14 @@ public static class Raycaster
         int iy = (int)MathF.Floor(origin.Y);
         int iz = (int)MathF.Floor(origin.Z);
 
-        // Step direction: +1 or -1 per axis.  Zero means the ray is axis-aligned and
-        // will never cross a boundary in that axis — we use Infinity for tMax/tDelta.
-        int stepX = Math.Sign(dir.X);
-        int stepY = Math.Sign(dir.Y);
-        int stepZ = Math.Sign(dir.Z);
-
-        // tMax: the ray parameter t at which the ray first crosses a boundary in each
-        // axis, measured from the ray origin.
-        // For a positive step the next X boundary is at floor(origin.X)+1;
-        // for a negative step it is at floor(origin.X) (the boundary behind the origin).
-        float tMaxX = stepX != 0
-            ? (stepX > 0
-                ? MathF.Floor(origin.X) + 1f - origin.X
-                : origin.X - MathF.Floor(origin.X))
-              / MathF.Abs(dir.X)
-            : float.PositiveInfinity;
-
-        float tMaxY = stepY != 0
-            ? (stepY > 0
-                ? MathF.Floor(origin.Y) + 1f - origin.Y
-                : origin.Y - MathF.Floor(origin.Y))
-              / MathF.Abs(dir.Y)
-            : float.PositiveInfinity;
-
-        float tMaxZ = stepZ != 0
-            ? (stepZ > 0
-                ? MathF.Floor(origin.Z) + 1f - origin.Z
-                : origin.Z - MathF.Floor(origin.Z))
-              / MathF.Abs(dir.Z)
-            : float.PositiveInfinity;
-
-        // tDelta: how far the ray must travel (in t) to cross one full voxel in each axis.
-        float tDeltaX = stepX != 0 ? 1f / MathF.Abs(dir.X) : float.PositiveInfinity;
-        float tDeltaY = stepY != 0 ? 1f / MathF.Abs(dir.Y) : float.PositiveInfinity;
-        float tDeltaZ = stepZ != 0 ? 1f / MathF.Abs(dir.Z) : float.PositiveInfinity;
-
-        // The face normal is the inward normal of the face we just crossed — stored as the
-        // OUTWARD normal of the entered voxel face (negated step direction).
-        Vector3i normal = Vector3i.Zero;
+        var dda = DdaTraversal.Initialize(origin, dir);
 
         while (true)
         {
-            // Pick the axis whose boundary is nearest along the ray.
-            float t;
-            int axis; // 0=X, 1=Y, 2=Z
-
-            if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { t = tMaxX; axis = 0; }
-            else if (tMaxY <= tMaxZ) { t = tMaxY; axis = 1; }
-            else { t = tMaxZ; axis = 2; }
+            float t = dda.Step(ref ix, ref iy, ref iz);
 
             // Exceeded reach — no hit.
             if (t > maxDistance) break;
-
-            // Advance into the next voxel and record which face we entered through.
-            switch (axis)
-            {
-                case 0: ix += stepX; tMaxX += tDeltaX; normal = new Vector3i(-stepX, 0, 0); break;
-                case 1: iy += stepY; tMaxY += tDeltaY; normal = new Vector3i(0, -stepY, 0); break;
-                case 2: iz += stepZ; tMaxZ += tDeltaZ; normal = new Vector3i(0, 0, -stepZ); break;
-            }
 
             if (!world.GetBlock(ix, iy, iz).IsEmpty)
             {
@@ -166,12 +114,12 @@ public static class Raycaster
                     // Attempt a sub-voxel DDA inside the chiseled container.
                     // If no filled sub-voxel is hit (all chiseled away) we fall
                     // through and the outer loop continues past this block.
-                    var subResult = CastSubVoxel(origin, dir, ix, iy, iz, normal, world);
+                    var subResult = CastSubVoxel(origin, dir, ix, iy, iz, dda.Normal, world);
                     if (subResult.Hit) return subResult;
                 }
                 else
                 {
-                    return new HitResult(new Vector3i(ix, iy, iz), normal);
+                    return new HitResult(new Vector3i(ix, iy, iz), dda.Normal);
                 }
             }
         }
@@ -242,45 +190,13 @@ public static class Raycaster
                 new Vector3i(six, siy, siz), blockEntryNormal);
 
         // ---- Standard DDA in sub-voxel integer space ----
-        int stepX = Math.Sign(dir.X);
-        int stepY = Math.Sign(dir.Y);
-        int stepZ = Math.Sign(dir.Z);
-
-        // tDelta: t-distance to cross one sub-voxel along each axis.
-        float tDeltaSubX = stepX != 0 ? 1f / (Nf * MathF.Abs(dir.X)) : float.PositiveInfinity;
-        float tDeltaSubY = stepY != 0 ? 1f / (Nf * MathF.Abs(dir.Y)) : float.PositiveInfinity;
-        float tDeltaSubZ = stepZ != 0 ? 1f / (Nf * MathF.Abs(dir.Z)) : float.PositiveInfinity;
-
-        // tMax: t at the first sub-voxel boundary from the entry point.
-        float tMaxSubX = stepX != 0
-            ? (stepX > 0 ? MathF.Floor(sox) + 1f - sox : sox - MathF.Floor(sox))
-              / (Nf * MathF.Abs(dir.X))
-            : float.PositiveInfinity;
-        float tMaxSubY = stepY != 0
-            ? (stepY > 0 ? MathF.Floor(soy) + 1f - soy : soy - MathF.Floor(soy))
-              / (Nf * MathF.Abs(dir.Y))
-            : float.PositiveInfinity;
-        float tMaxSubZ = stepZ != 0
-            ? (stepZ > 0 ? MathF.Floor(soz) + 1f - soz : soz - MathF.Floor(soz))
-              / (Nf * MathF.Abs(dir.Z))
-            : float.PositiveInfinity;
-
-        Vector3i subNormal = Vector3i.Zero;
+        // cellSize = 1/N so that t-values remain in world space.
+        var dda = DdaTraversal.Initialize(new Vector3(sox, soy, soz), dir, 1f / Nf);
         int maxSteps = N * 3; // worst-case diagonal traversal
 
         for (int step = 0; step < maxSteps; step++)
         {
-            int axis;
-            if (tMaxSubX <= tMaxSubY && tMaxSubX <= tMaxSubZ) axis = 0;
-            else if (tMaxSubY <= tMaxSubZ) axis = 1;
-            else axis = 2;
-
-            switch (axis)
-            {
-                case 0: six += stepX; tMaxSubX += tDeltaSubX; subNormal = new Vector3i(-stepX, 0, 0); break;
-                case 1: siy += stepY; tMaxSubY += tDeltaSubY; subNormal = new Vector3i(0, -stepY, 0); break;
-                case 2: siz += stepZ; tMaxSubZ += tDeltaSubZ; subNormal = new Vector3i(0, 0, -stepZ); break;
-            }
+            dda.Step(ref six, ref siy, ref siz);
 
             // Exited the sub-voxel grid — no hit inside this chiseled block.
             if (six < 0 || six >= N || siy < 0 || siy >= N || siz < 0 || siz >= N)
@@ -288,8 +204,8 @@ public static class Raycaster
 
             if (chiseled.Get(six, siy, siz))
                 return new HitResult(
-                    new Vector3i(blockX, blockY, blockZ), subNormal,
-                    new Vector3i(six, siy, siz), subNormal);
+                    new Vector3i(blockX, blockY, blockZ), dda.Normal,
+                    new Vector3i(six, siy, siz), dda.Normal);
         }
 
         return default; // All sub-voxels along the ray are empty.

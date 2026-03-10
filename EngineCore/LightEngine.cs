@@ -39,6 +39,9 @@ public static class LightEngine
     private const byte MaxSunLight = 15;
     private const byte MaxBlockLight = 14; // Torches (when added)
 
+    // Chunk keys that need a light recompute on the next FlushDirty call.
+    private static readonly HashSet<Vector2i> _pendingDirty = new();
+
     // Axis-aligned neighbour offsets (6-connected face adjacency).
     private static readonly (int dx, int dy, int dz)[] Neighbors6 =
     {
@@ -94,29 +97,38 @@ public static class LightEngine
     }
 
     /// <summary>
-    /// Updates lighting in the world after a block has been placed or removed
-    /// at the given world coordinate.  Triggers a targeted recompute of the
-    /// affected chunk (plus neighbours if on a boundary).
+    /// Schedules a lighting recompute for the chunk containing
+    /// <paramref name="blockPos"/> and its four cardinal XZ neighbours.
+    /// The actual BFS runs the next time <see cref="FlushDirty"/> is called
+    /// (once per frame from <see cref="WorldStreamer"/>), so multiple block
+    /// changes within the same frame are batched into a single propagation pass.
     /// </summary>
-    public static void UpdateAtBlock(int wx, int wy, int wz, World world)
+    public static void UpdateAtBlock(Vector3i blockPos, World world)
     {
-        // Simple strategy: recompute the owning chunk and its four XZ neighbours
-        // so that light bleeding across seams stays correct.
-        int cx = (int)MathF.Floor((float)wx / Chunk.Size);
-        int cz = (int)MathF.Floor((float)wz / Chunk.Size);
+        int cx = (int)MathF.Floor((float)blockPos.X / Chunk.Size);
+        int cz = (int)MathF.Floor((float)blockPos.Z / Chunk.Size);
 
-        var keysToRecompute = new HashSet<Vector2i>
-        {
-            new(cx,     cz),
-            new(cx - 1, cz),
-            new(cx + 1, cz),
-            new(cx,     cz - 1),
-            new(cx,     cz + 1),
-        };
+        _pendingDirty.Add(new Vector2i(cx, cz));
+        _pendingDirty.Add(new Vector2i(cx - 1, cz));
+        _pendingDirty.Add(new Vector2i(cx + 1, cz));
+        _pendingDirty.Add(new Vector2i(cx, cz - 1));
+        _pendingDirty.Add(new Vector2i(cx, cz + 1));
+    }
+
+    /// <summary>
+    /// Recomputes lighting for every chunk that was marked dirty by
+    /// <see cref="UpdateAtBlock"/> since the last flush, then clears the
+    /// dirty set.  Returns the set of chunk keys whose light data changed
+    /// so the caller can schedule mesh rebuilds for them.
+    /// </summary>
+    public static HashSet<Vector2i> FlushDirty(World world)
+    {
+        if (_pendingDirty.Count == 0)
+            return new HashSet<Vector2i>();
 
         var queue = new Queue<(int, int, int, byte, bool)>();
 
-        foreach (var key in keysToRecompute)
+        foreach (var key in _pendingDirty)
         {
             if (!world.Chunks.TryGetValue(key, out var chunk)) continue;
             System.Array.Clear(chunk.SunLight, 0, Chunk.Volume);
@@ -126,6 +138,10 @@ public static class LightEngine
         }
 
         BfsPropagate(world, queue);
+
+        var relit = new HashSet<Vector2i>(_pendingDirty);
+        _pendingDirty.Clear();
+        return relit;
     }
 
     // -------------------------------------------------------------------------
@@ -202,7 +218,7 @@ public static class LightEngine
     /// <summary>Returns the block-light emission level for the given block ID.</summary>
     private static byte EmittedBlockLight(ushort id) => id switch
     {
-        // 4 => MaxBlockLight,  // Torch — add when torch block type is created
+        4 => MaxBlockLight,  // Torch
         _ => 0,
     };
 

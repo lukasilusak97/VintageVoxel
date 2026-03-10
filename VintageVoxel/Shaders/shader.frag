@@ -35,6 +35,8 @@ void main()
     else
     {
         vec4 texColor = texture(uTexture, vTexCoord);
+        if (texColor.a < 0.1)
+            discard;
         FragColor = vec4(texColor.rgb * lighting, texColor.a);
     }
 }

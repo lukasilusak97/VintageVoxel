@@ -1,5 +1,4 @@
 using OpenTK.Mathematics;
-using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace VintageVoxel;
 
@@ -37,26 +36,19 @@ public class Camera
     public float MoveSpeed = 10f;  // World units per second (creative fly speed)
     public float MouseSensitivity = 0.002f; // Radians per pixel
 
-    // -------------------------------------------------------------------------
-    // Phase 10: Physics & Movement
-    // -------------------------------------------------------------------------
+    // Eye height is retained here solely for the FeetPosition convenience property.
+    // The authoritative copy lives in CollisionSystem.EyeHeight (Phase 6 will consolidate).
+    private const float EyeHeight = 1.7f;
 
-    // Player AABB dimensions (standard humanoid proportions).
-    private const float EyeHeight = 1.7f;       // Eye position above feet
-    private const float PlayerHalfWidth = 0.3f; // Half-extent in X and Z
-    private const float PlayerHeight = 1.8f;    // Total height
-
-    // Physics constants.
-    private const float Gravity = -25f;      // Downward acceleration (world units/s²)
-    private const float JumpSpeed = 8f;      // Initial Y velocity when jumping
-    private const float MaxFallSpeed = 60f;  // Terminal-velocity cap
-    private const float SurvivalMoveSpeed = 5f; // Horizontal walk speed
+    // -------------------------------------------------------------------------
+    // Physics state — updated each frame by PhysicsSystem
+    // -------------------------------------------------------------------------
 
     /// <summary>Current linear velocity in world units per second. Zero in creative mode.</summary>
     public Vector3 Velocity;
 
     /// <summary>True while the player is resting on solid ground this frame.</summary>
-    public bool IsOnGround { get; private set; }
+    public bool IsOnGround;
 
     /// <summary>
     /// Creative/fly mode — full freedom, no gravity or collision.
@@ -95,125 +87,6 @@ public class Camera
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Runs one physics/movement tick. In creative mode the player flies freely;
-    /// in survival mode gravity, AABB collision and sliding are applied.
-    /// </summary>
-    /// <param name="world">Used for block queries during collision detection.</param>
-    /// <param name="keyboard">Current keyboard state.</param>
-    /// <param name="dt">Delta time in seconds.</param>
-    public void PhysicsUpdate(World world, KeyboardState keyboard, float dt)
-    {
-        if (CreativeMode)
-        {
-            // --- Creative / fly mode: original free-fly behaviour ---
-            float speed = MoveSpeed * dt;
-            if (keyboard.IsKeyDown(Keys.W)) Position += _front * speed;
-            if (keyboard.IsKeyDown(Keys.S)) Position -= _front * speed;
-            if (keyboard.IsKeyDown(Keys.A)) Position -= _right * speed;
-            if (keyboard.IsKeyDown(Keys.D)) Position += _right * speed;
-            if (keyboard.IsKeyDown(Keys.E)) Position += Vector3.UnitY * speed;
-            if (keyboard.IsKeyDown(Keys.Q)) Position -= Vector3.UnitY * speed;
-            Velocity = Vector3.Zero;
-            IsOnGround = false;
-            return;
-        }
-
-        // --- Survival mode: gravity + AABB collision + per-axis sliding ---
-
-        // Project look direction onto the XZ plane so the player always walks
-        // horizontally regardless of the angle they are looking up or down.
-        var frontXZ = new Vector3(_front.X, 0f, _front.Z);
-        if (frontXZ.LengthSquared > 0.0001f) frontXZ = Vector3.Normalize(frontXZ);
-        var rightXZ = new Vector3(_right.X, 0f, _right.Z);
-        if (rightXZ.LengthSquared > 0.0001f) rightXZ = Vector3.Normalize(rightXZ);
-
-        var horizontal = Vector3.Zero;
-        if (keyboard.IsKeyDown(Keys.W)) horizontal += frontXZ;
-        if (keyboard.IsKeyDown(Keys.S)) horizontal -= frontXZ;
-        if (keyboard.IsKeyDown(Keys.A)) horizontal -= rightXZ;
-        if (keyboard.IsKeyDown(Keys.D)) horizontal += rightXZ;
-        if (horizontal.LengthSquared > 0f)
-            horizontal = Vector3.Normalize(horizontal) * SurvivalMoveSpeed;
-
-        // Horizontal velocity comes entirely from input each frame (no momentum).
-        Velocity.X = horizontal.X;
-        Velocity.Z = horizontal.Z;
-
-        // Jump — only when the player is standing on solid ground.
-        if (keyboard.IsKeyDown(Keys.Space) && IsOnGround)
-            Velocity.Y = JumpSpeed;
-
-        // Integrate gravity; clamp to terminal velocity.
-        Velocity.Y = MathF.Max(Velocity.Y + Gravity * dt, -MaxFallSpeed);
-
-        // -----------------------------------------------------------------------
-        // Per-axis collision resolution — the key to sliding movement.
-        //
-        // By resolving each axis independently, a player moving diagonally into a
-        // wall will slide along it rather than stopping dead.  If only one axis
-        // produces a penetration, only that axis's velocity is cancelled.
-        // -----------------------------------------------------------------------
-
-        // X axis
-        float dx = Velocity.X * dt;
-        Position.X += dx;
-        if (IsCollidingAt(world, Position)) { Position.X -= dx; Velocity.X = 0f; }
-
-        // Y axis
-        float dy = Velocity.Y * dt;
-        Position.Y += dy;
-        if (IsCollidingAt(world, Position)) { Position.Y -= dy; Velocity.Y = 0f; }
-
-        // Z axis
-        float dz = Velocity.Z * dt;
-        Position.Z += dz;
-        if (IsCollidingAt(world, Position)) { Position.Z -= dz; Velocity.Z = 0f; }
-
-        // Ground probe: a tiny downward step detects floor contact so jumping is
-        // only allowed when the player is actually standing on something.
-        IsOnGround = IsCollidingAt(world, new Vector3(Position.X, Position.Y - 0.05f, Position.Z));
-    }
-
-    // -------------------------------------------------------------------------
-    // AABB collision helper
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Returns true when the player's AABB, centred on <paramref name="eyePos"/>
-    /// (eye-level position), overlaps at least one solid block in the world.
-    ///
-    /// The AABB spans:
-    ///   X: [eyePos.X - PlayerHalfWidth, eyePos.X + PlayerHalfWidth]
-    ///   Y: [eyePos.Y - EyeHeight,       eyePos.Y - EyeHeight + PlayerHeight]
-    ///   Z: [eyePos.Z - PlayerHalfWidth, eyePos.Z + PlayerHalfWidth]
-    /// </summary>
-    private static bool IsCollidingAt(World world, Vector3 eyePos)
-    {
-        float feetY = eyePos.Y - EyeHeight;
-
-        // Treat the region below world Y = 0 as solid bedrock so the player
-        // cannot fall out of the world.
-        if (feetY < 0f) return true;
-
-        // The small epsilon on the max extent prevents a player standing exactly
-        // on a block edge from being considered inside the next block.
-        int minX = (int)MathF.Floor(eyePos.X - PlayerHalfWidth);
-        int maxX = (int)MathF.Floor(eyePos.X + PlayerHalfWidth - 0.001f);
-        int minY = (int)MathF.Floor(feetY);
-        int maxY = (int)MathF.Floor(feetY + PlayerHeight - 0.001f);
-        int minZ = (int)MathF.Floor(eyePos.Z - PlayerHalfWidth);
-        int maxZ = (int)MathF.Floor(eyePos.Z + PlayerHalfWidth - 0.001f);
-
-        for (int y = minY; y <= maxY; y++)
-            for (int x = minX; x <= maxX; x++)
-                for (int z = minZ; z <= maxZ; z++)
-                    if (!world.GetBlock(x, y, z).IsEmpty)
-                        return true;
-
-        return false;
-    }
-
-    /// <summary>
     /// Process a raw mouse delta (pixels moved) into yaw/pitch rotation.
     /// delta.X → yaw, delta.Y → pitch.
     /// </summary>
@@ -232,6 +105,9 @@ public class Camera
 
     /// <summary>The camera's current look direction (normalised).</summary>
     public Vector3 Front => _front;
+
+    /// <summary>The camera's current right direction (normalised).</summary>
+    public Vector3 Right => _right;
 
     // -------------------------------------------------------------------------
     // Private helpers

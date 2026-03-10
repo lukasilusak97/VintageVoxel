@@ -1,5 +1,6 @@
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
+using VintageVoxel.Rendering;
 
 namespace VintageVoxel;
 
@@ -18,9 +19,8 @@ public sealed class EntityItemRenderer : IDisposable
     private const int VertsPerFace = 4;
     private const int FloatsPerVertex = 7; // x y z u v light ao
 
-    private readonly int _vao;
-    private readonly int _vbo;
-    private readonly int _ebo;
+    private readonly GpuMesh _mesh;
+    private readonly GpuResourceManager _gpuResources;
 
     // 6 faces × 4 vertices × 7 floats — refilled before every draw call.
     private readonly float[] _verts = new float[FaceCount * VertsPerFace * FloatsPerVertex];
@@ -44,40 +44,10 @@ public sealed class EntityItemRenderer : IDisposable
         }
     }
 
-    public EntityItemRenderer()
+    public EntityItemRenderer(GpuResourceManager gpuResources)
     {
-        _vao = GL.GenVertexArray();
-        GL.BindVertexArray(_vao);
-
-        _vbo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, _verts.Length * sizeof(float),
-                      IntPtr.Zero, BufferUsageHint.DynamicDraw);
-
-        _ebo = GL.GenBuffer();
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer,
-                      CubeIndices.Length * sizeof(uint), CubeIndices,
-                      BufferUsageHint.StaticDraw);
-
-        // Vertex attribute layout mirrors UploadChunk in Game.cs (stride = 28 bytes).
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false,
-                               FloatsPerVertex * sizeof(float), 0);
-        GL.EnableVertexAttribArray(0);
-
-        GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false,
-                               FloatsPerVertex * sizeof(float), 3 * sizeof(float));
-        GL.EnableVertexAttribArray(1);
-
-        GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false,
-                               FloatsPerVertex * sizeof(float), 5 * sizeof(float));
-        GL.EnableVertexAttribArray(2);
-
-        GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false,
-                               FloatsPerVertex * sizeof(float), 6 * sizeof(float));
-        GL.EnableVertexAttribArray(3);
-
-        GL.BindVertexArray(0);
+        _gpuResources = gpuResources;
+        _mesh = _gpuResources.AllocateDynamicMesh(_verts.Length, CubeIndices, 7);
     }
 
     // -------------------------------------------------------------------------
@@ -147,11 +117,15 @@ public sealed class EntityItemRenderer : IDisposable
                 currentTex = atlasHandle;
             }
 
-            GL.BindVertexArray(_vao);
-            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+            GL.BindVertexArray(_mesh.Vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _mesh.Vbo);
 
-            float u0 = entity.Item.TextureId * TextureAtlas.TileUvWidth;
-            float u1 = u0 + TextureAtlas.TileUvWidth;
+            // Look up per-face tile indices from the registry so blocks like grass
+            // show the correct texture on each face (e.g. grass top vs. side).
+            ushort bid = (ushort)entity.Item.BlockId;
+
+            float FaceU0(int face) => BlockRegistry.TileForFace(bid, face) * TextureAtlas.TileUvWidth;
+            float FaceU1(int face) => FaceU0(face) + TextureAtlas.TileUvWidth;
 
             // ---- 6 faces of a unit cube centred at the local origin ----
             // Winding/vertex order matches ChunkMeshBuilder so back-face culling
@@ -161,40 +135,58 @@ public sealed class EntityItemRenderer : IDisposable
             int v = 0; // running vertex index (0..23)
 
             // Face 0 — Top (+Y), light 1.0
-            WriteVertex(v++, -0.5f, 0.5f, -0.5f, u0, 0f, 1.0f);
-            WriteVertex(v++, -0.5f, 0.5f, 0.5f, u0, 1f, 1.0f);
-            WriteVertex(v++, 0.5f, 0.5f, 0.5f, u1, 1f, 1.0f);
-            WriteVertex(v++, 0.5f, 0.5f, -0.5f, u1, 0f, 1.0f);
+            {
+                float u0 = FaceU0(0), u1 = FaceU1(0);
+                WriteVertex(v++, -0.5f, 0.5f, -0.5f, u0, 0f, 1.0f);
+                WriteVertex(v++, -0.5f, 0.5f, 0.5f, u0, 1f, 1.0f);
+                WriteVertex(v++, 0.5f, 0.5f, 0.5f, u1, 1f, 1.0f);
+                WriteVertex(v++, 0.5f, 0.5f, -0.5f, u1, 0f, 1.0f);
+            }
 
             // Face 1 — Bottom (-Y), light 0.5
-            WriteVertex(v++, -0.5f, -0.5f, -0.5f, u0, 0f, 0.5f);
-            WriteVertex(v++, 0.5f, -0.5f, -0.5f, u1, 0f, 0.5f);
-            WriteVertex(v++, 0.5f, -0.5f, 0.5f, u1, 1f, 0.5f);
-            WriteVertex(v++, -0.5f, -0.5f, 0.5f, u0, 1f, 0.5f);
+            {
+                float u0 = FaceU0(1), u1 = FaceU1(1);
+                WriteVertex(v++, -0.5f, -0.5f, -0.5f, u0, 0f, 0.5f);
+                WriteVertex(v++, 0.5f, -0.5f, -0.5f, u1, 0f, 0.5f);
+                WriteVertex(v++, 0.5f, -0.5f, 0.5f, u1, 1f, 0.5f);
+                WriteVertex(v++, -0.5f, -0.5f, 0.5f, u0, 1f, 0.5f);
+            }
 
             // Face 2 — North (-Z), light 0.8
-            WriteVertex(v++, -0.5f, -0.5f, -0.5f, u0, 0f, 0.8f);
-            WriteVertex(v++, -0.5f, 0.5f, -0.5f, u0, 1f, 0.8f);
-            WriteVertex(v++, 0.5f, 0.5f, -0.5f, u1, 1f, 0.8f);
-            WriteVertex(v++, 0.5f, -0.5f, -0.5f, u1, 0f, 0.8f);
+            {
+                float u0 = FaceU0(2), u1 = FaceU1(2);
+                WriteVertex(v++, -0.5f, -0.5f, -0.5f, u0, 0f, 0.8f);
+                WriteVertex(v++, -0.5f, 0.5f, -0.5f, u0, 1f, 0.8f);
+                WriteVertex(v++, 0.5f, 0.5f, -0.5f, u1, 1f, 0.8f);
+                WriteVertex(v++, 0.5f, -0.5f, -0.5f, u1, 0f, 0.8f);
+            }
 
             // Face 3 — South (+Z), light 0.8
-            WriteVertex(v++, 0.5f, -0.5f, 0.5f, u0, 0f, 0.8f);
-            WriteVertex(v++, 0.5f, 0.5f, 0.5f, u0, 1f, 0.8f);
-            WriteVertex(v++, -0.5f, 0.5f, 0.5f, u1, 1f, 0.8f);
-            WriteVertex(v++, -0.5f, -0.5f, 0.5f, u1, 0f, 0.8f);
+            {
+                float u0 = FaceU0(3), u1 = FaceU1(3);
+                WriteVertex(v++, 0.5f, -0.5f, 0.5f, u0, 0f, 0.8f);
+                WriteVertex(v++, 0.5f, 0.5f, 0.5f, u0, 1f, 0.8f);
+                WriteVertex(v++, -0.5f, 0.5f, 0.5f, u1, 1f, 0.8f);
+                WriteVertex(v++, -0.5f, -0.5f, 0.5f, u1, 0f, 0.8f);
+            }
 
             // Face 4 — West (-X), light 0.65
-            WriteVertex(v++, -0.5f, -0.5f, 0.5f, u0, 0f, 0.65f);
-            WriteVertex(v++, -0.5f, 0.5f, 0.5f, u0, 1f, 0.65f);
-            WriteVertex(v++, -0.5f, 0.5f, -0.5f, u1, 1f, 0.65f);
-            WriteVertex(v++, -0.5f, -0.5f, -0.5f, u1, 0f, 0.65f);
+            {
+                float u0 = FaceU0(4), u1 = FaceU1(4);
+                WriteVertex(v++, -0.5f, -0.5f, 0.5f, u0, 0f, 0.65f);
+                WriteVertex(v++, -0.5f, 0.5f, 0.5f, u0, 1f, 0.65f);
+                WriteVertex(v++, -0.5f, 0.5f, -0.5f, u1, 1f, 0.65f);
+                WriteVertex(v++, -0.5f, -0.5f, -0.5f, u1, 0f, 0.65f);
+            }
 
             // Face 5 — East (+X), light 0.65
-            WriteVertex(v++, 0.5f, -0.5f, -0.5f, u0, 0f, 0.65f);
-            WriteVertex(v++, 0.5f, 0.5f, -0.5f, u0, 1f, 0.65f);
-            WriteVertex(v++, 0.5f, 0.5f, 0.5f, u1, 1f, 0.65f);
-            WriteVertex(v++, 0.5f, -0.5f, 0.5f, u1, 0f, 0.65f);
+            {
+                float u0 = FaceU0(5), u1 = FaceU1(5);
+                WriteVertex(v++, 0.5f, -0.5f, -0.5f, u0, 0f, 0.65f);
+                WriteVertex(v++, 0.5f, 0.5f, -0.5f, u0, 1f, 0.65f);
+                WriteVertex(v++, 0.5f, 0.5f, 0.5f, u1, 1f, 0.65f);
+                WriteVertex(v++, 0.5f, -0.5f, 0.5f, u1, 0f, 0.65f);
+            }
 
             GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero,
                              _verts.Length * sizeof(float), _verts);
@@ -246,8 +238,6 @@ public sealed class EntityItemRenderer : IDisposable
 
     public void Dispose()
     {
-        GL.DeleteVertexArray(_vao);
-        GL.DeleteBuffer(_vbo);
-        GL.DeleteBuffer(_ebo);
+        _gpuResources.Free(_mesh);
     }
 }

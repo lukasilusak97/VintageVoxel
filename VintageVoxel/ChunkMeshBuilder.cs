@@ -221,51 +221,7 @@ public static class ChunkMeshBuilder
             light[v] = SampleLight(bx + fdx, by + fdy, bz + fdz, chunk, world);
         }
 
-        // Emit vertices per face in the same CCW winding as before.
-        switch (face)
-        {
-            case 0: // Top (+Y)
-                AddV(verts, x0, y1, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, 1f, light[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x1, y1, z0, u1, 0f, light[3], ao[3]);
-                break;
-            case 1: // Bottom (-Y)
-                AddV(verts, x0, y0, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x1, y0, z0, u1, 0f, light[1], ao[1]);
-                AddV(verts, x1, y0, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x0, y0, z1, u0, 1f, light[3], ao[3]);
-                break;
-            case 2: // North (-Z)
-                AddV(verts, x0, y0, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x0, y1, z0, u0, 1f, light[1], ao[1]);
-                AddV(verts, x1, y1, z0, u1, 1f, light[2], ao[2]);
-                AddV(verts, x1, y0, z0, u1, 0f, light[3], ao[3]);
-                break;
-            case 3: // South (+Z)
-                AddV(verts, x1, y0, z1, u0, 0f, light[0], ao[0]);
-                AddV(verts, x1, y1, z1, u0, 1f, light[1], ao[1]);
-                AddV(verts, x0, y1, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x0, y0, z1, u1, 0f, light[3], ao[3]);
-                break;
-            case 4: // West (-X)
-                AddV(verts, x0, y0, z1, u0, 0f, light[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, 1f, light[1], ao[1]);
-                AddV(verts, x0, y1, z0, u1, 1f, light[2], ao[2]);
-                AddV(verts, x0, y0, z0, u1, 0f, light[3], ao[3]);
-                break;
-            case 5: // East (+X)
-                AddV(verts, x1, y0, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x1, y1, z0, u0, 1f, light[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x1, y0, z1, u1, 0f, light[3], ao[3]);
-                break;
-        }
-
-        indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
-        indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
-    }
-
+        FaceEmitter.Emit(verts, indices, face, x0, y0, z0, 1f, u0, u1, light, ao);
     // -----------------------------------------------------------------------
     // Light & AO helpers
     // -----------------------------------------------------------------------
@@ -301,12 +257,6 @@ public static class ChunkMeshBuilder
             return !world.GetBlock(wx, ly, wz).IsTransparent;
         }
         return false;
-    }
-
-    private static void AddV(List<float> v,
-        float x, float y, float z, float u, float vt, float light, float ao)
-    {
-        v.Add(x); v.Add(y); v.Add(z); v.Add(u); v.Add(vt); v.Add(light); v.Add(ao);
     }
 
     // -----------------------------------------------------------------------
@@ -363,9 +313,32 @@ public static class ChunkMeshBuilder
                         }
 
                         if (exposed)
+                        {
+                            // Sample block-level light and AO from the parent voxel's
+                            // neighbourhood — sub-voxel granularity is impractical for BFS,
+                            // so we use the surrounding full-block context.
+                            var (fdx, fdy, fdz) = NeighbourOffsets[face];
+                            float lightVal = SampleLight(bx + fdx, by + fdy, bz + fdz, chunk, world);
+
+                            Span<float> lightArr = stackalloc float[4];
+                            Span<float> aoArr = stackalloc float[4];
+                            for (int vi = 0; vi < 4; vi++)
+                            {
+                                lightArr[vi] = lightVal;
+                                int solidCount = 0;
+                                for (int k = 0; k < 3; k++)
+                                {
+                                    var (aox, aoy, aoz) = AoNeighbors[face, vi, k];
+                                    if (IsSolid(bx + aox, by + aoy, bz + aoz, chunk, world))
+                                        solidCount++;
+                                }
+                                aoArr[vi] = solidCount switch { 0 => 1.0f, 1 => 0.8f, 2 => 0.6f, _ => 0.4f };
+                            }
+
                             EmitSubFace(verts, indices, face,
                                 bx + sx * sub, by + sy * sub, bz + sz * sub,
-                                sub, chiseled.SourceBlockId);
+                                sub, chiseled.SourceBlockId, lightArr, aoArr);
+                        }
                     }
                 }
     }
@@ -373,63 +346,16 @@ public static class ChunkMeshBuilder
     /// <summary>
     /// Appends 4 vertices and 6 indices for a single sub-voxel face.
     /// Uses the same CCW winding as <see cref="EmitFace"/>.
-    /// Light and AO are set to 1.0 (full-bright) — sub-voxel granularity makes
-    /// per-vertex BFS impractical; a future pass could sample the parent block.
     /// </summary>
     private static void EmitSubFace(
         List<float> verts, List<uint> indices,
-        int face, float ox, float oy, float oz, float size, ushort blockId)
+        int face, float ox, float oy, float oz, float size, ushort blockId,
+        ReadOnlySpan<float> light, ReadOnlySpan<float> ao)
     {
-        uint baseIdx = (uint)(verts.Count / 7);
-        float x0 = ox, x1 = ox + size;
-        float y0 = oy, y1 = oy + size;
-        float z0 = oz, z1 = oz + size;
-
         int tileIdx = BlockRegistry.TileForFace(blockId, face);
         float u0 = tileIdx * TextureAtlas.TileUvWidth;
         float u1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
 
-        switch (face)
-        {
-            case 0: // Top (+Y)
-                AddV(verts, x0, y1, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x0, y1, z1, u0, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z0, u1, 0f, 1f, 1f);
-                break;
-            case 1: // Bottom (-Y)
-                AddV(verts, x0, y0, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x1, y0, z0, u1, 0f, 1f, 1f);
-                AddV(verts, x1, y0, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x0, y0, z1, u0, 1f, 1f, 1f);
-                break;
-            case 2: // North (-Z)
-                AddV(verts, x0, y0, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x0, y1, z0, u0, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z0, u1, 1f, 1f, 1f);
-                AddV(verts, x1, y0, z0, u1, 0f, 1f, 1f);
-                break;
-            case 3: // South (+Z)
-                AddV(verts, x1, y0, z1, u0, 0f, 1f, 1f);
-                AddV(verts, x1, y1, z1, u0, 1f, 1f, 1f);
-                AddV(verts, x0, y1, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x0, y0, z1, u1, 0f, 1f, 1f);
-                break;
-            case 4: // West (-X)
-                AddV(verts, x0, y0, z1, u0, 0f, 1f, 1f);
-                AddV(verts, x0, y1, z1, u0, 1f, 1f, 1f);
-                AddV(verts, x0, y1, z0, u1, 1f, 1f, 1f);
-                AddV(verts, x0, y0, z0, u1, 0f, 1f, 1f);
-                break;
-            case 5: // East (+X)
-                AddV(verts, x1, y0, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x1, y1, z0, u0, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x1, y0, z1, u1, 0f, 1f, 1f);
-                break;
-        }
-
-        indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
-        indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
+        FaceEmitter.Emit(verts, indices, face, ox, oy, oz, size, u0, u1, light, ao);
     }
 }

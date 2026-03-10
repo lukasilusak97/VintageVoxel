@@ -6,7 +6,7 @@ namespace VintageVoxel;
 /// <summary>
 /// The in-game developer dashboard rendered with ImGui.
 ///
-/// Call <see cref="Draw"/> every frame (after ImGui.NewFrame and before
+/// Call <see cref="Render"/> every frame (after ImGui.NewFrame and before
 /// ImGuiController.Render) to draw the overlay window and update toggle states.
 ///
 /// Exposed properties are read by Game.cs to apply the corresponding GL state
@@ -14,23 +14,13 @@ namespace VintageVoxel;
 /// </summary>
 public class DebugWindow
 {
-    // --- Toggle states (read by Game.cs) ---
-    public bool WireframeMode { get; private set; }
-    public bool ShowChunkBorders { get; private set; }
-    public bool NoTextures { get; private set; }
-    /// <summary>
-    /// When true the shader shows AO+light as greyscale (uNoTexture = 2).
-    /// Shows the combined effect of ambient occlusion and light levels without
-    /// texture colour, making both effects easy to inspect.
-    /// </summary>
-    public bool LightingDebug { get; private set; }
 
     // Exponential moving average for a stable FPS display.
     private float _smoothFps;
     private const float FpsSmoothAlpha = 0.05f;
 
     /// <summary>
-    /// Draws the debug overlay window. Call each frame between
+    /// Renders the debug overlay window. Call each frame between
     /// ImGuiController.Update() and ImGuiController.Render().
     /// </summary>
     /// <param name="fps">Raw frames-per-second this frame.</param>
@@ -41,9 +31,9 @@ public class DebugWindow
     /// <param name="heldItem">The <see cref="ItemStack"/> in the selected hotbar slot.</param>
     /// <param name="hotbarSlot">Index of the currently selected hotbar slot (0-based).</param>
     /// <param name="saveStatus">Optional last save / load status line shown in the overlay.</param>
-    public void Draw(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode,
+    public void Render(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode,
                      ItemStack heldItem, int hotbarSlot,
-                     string? saveStatus = null)
+                     DebugState debugState, string? saveStatus = null)
     {
         // Smooth FPS to stop the number flickering.
         _smoothFps = _smoothFps < 1f
@@ -79,21 +69,10 @@ public class DebugWindow
         ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Toggles");
         ImGui.Separator();
 
-        bool wf = WireframeMode;
-        ImGui.Checkbox("Wireframe Mode", ref wf);
-        WireframeMode = wf;
-
-        bool cb = ShowChunkBorders;
-        ImGui.Checkbox("Show Chunk Borders", ref cb);
-        ShowChunkBorders = cb;
-
-        bool nt = NoTextures;
-        ImGui.Checkbox("No Textures (White)", ref nt);
-        NoTextures = nt;
-
-        bool ld = LightingDebug;
-        ImGui.Checkbox("Lighting Debug (AO+Light)", ref ld);
-        LightingDebug = ld;
+        ImGui.Checkbox("Wireframe Mode", ref debugState.WireframeMode);
+        ImGui.Checkbox("Show Chunk Borders", ref debugState.ShowChunkBorders);
+        ImGui.Checkbox("No Textures (White)", ref debugState.NoTextures);
+        ImGui.Checkbox("Lighting Debug (AO+Light)", ref debugState.LightingDebug);
 
         ImGui.Spacing();
 

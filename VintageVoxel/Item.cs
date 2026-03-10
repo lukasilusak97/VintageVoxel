@@ -25,10 +25,10 @@ public class Item
     public int MaxStackSize { get; }
 
     /// <summary>
-    /// Index of the atlas tile used to render this item's 2-D icon.
-    /// Only meaningful when <see cref="Type"/> is <see cref="ItemType.Block"/>.
+    /// The block ID this item places, or 0 for non-block items.
+    /// Used to look up per-face atlas tiles via <see cref="BlockRegistry.TileForFace"/>.
     /// </summary>
-    public int TextureId { get; }
+    public int BlockId { get; }
 
     /// <summary>Whether this item is a placed block or a stand-alone model.</summary>
     public ItemType Type { get; }
@@ -46,14 +46,14 @@ public class Item
     /// </summary>
     public ModelMesh? Mesh { get; }
 
-    public Item(int id, string name, int maxStackSize, int textureId,
+    public Item(int id, string name, int maxStackSize, int blockId = 0,
                 ItemType type = ItemType.Block, VoxelModel? model = null,
                 ModelMesh? mesh = null)
     {
         Id = id;
         Name = name;
         MaxStackSize = maxStackSize;
-        TextureId = textureId;
+        BlockId = blockId;
         Type = type;
         Model = model;
         Mesh = mesh;

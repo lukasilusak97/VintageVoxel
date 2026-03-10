@@ -69,13 +69,13 @@ public class Chunk
 
     /// <summary>
     /// Overwrites the entire block array from a saved ID list produced by
-    /// <see cref="WorldPersistence"/>.  Transparency is derived directly from
-    /// the block ID (Air = transparent, everything else = opaque).
+    /// <see cref="WorldPersistence"/>.  Transparency is resolved through the
+    /// block registry so water, leaves, and other transparent blocks render correctly.
     /// </summary>
     internal void LoadBlocksFromSave(ushort[] savedIds)
     {
         for (int i = 0; i < Volume; i++)
-            _blocks[i] = new Block { Id = savedIds[i], IsTransparent = savedIds[i] == 0 };
+            _blocks[i] = new Block { Id = savedIds[i], IsTransparent = BlockRegistry.IsTransparent(savedIds[i]) };
     }
 
     // ------------------------------------------------------------------
@@ -93,47 +93,207 @@ public class Chunk
     // World generation
     // ------------------------------------------------------------------
 
+    // Y level at which still water fills any air column below the surface.
+    private const int SeaLevel = 12;
+
+    // Biome identifiers.
+    private const int BiomePlains = 0;
+    private const int BiomeForest = 1;
+    private const int BiomeDesert = 2;
+    private const int BiomeMountains = 3;
+    private const int BiomeSnowy = 4;
+
     /// <summary>
-    /// Generates terrain using fractional Brownian motion (Perlin noise).
-    ///
-    /// Block stacking from bottom to surface:
-    ///   y &lt; surfaceY - 3  →  Stone  (ID 2)
-    ///   y &lt; surfaceY      →  Dirt   (ID 1)
-    ///   y == surfaceY     →  Grass  (ID 3, top tile = grass, sides/bottom = dirt)
-    ///   y &gt; surfaceY      →  Air
-    ///
-    /// noiseScale controls feature width: smaller = broader hills.
-    /// minHeight / maxHeight clamp the surface within the chunk's Y range.
+    /// Computes the terrain surface height (in block Y) at the given world-space XZ
+    /// position using multi-octave Perlin noise.  Mountains receive an additional
+    /// ridge-boost when the base height exceeds mid-range.
+    /// </summary>
+    private static int ComputeSurfaceY(float wx, float wz)
+    {
+        // Base continent shape — 6 octaves for rich detail, coarse scale for wide features.
+        float base_ = NoiseGenerator.Octave(wx * 0.018f, wz * 0.018f, octaves: 6);
+        // Map [0,1] → [4,28]
+        int h = 4 + (int)(base_ * 24f);
+
+        // Mountain ridge amplifier: only kicks in above mid-height.
+        if (h > 16)
+        {
+            float ridge = NoiseGenerator.Octave(wx * 0.03f, wz * 0.03f, octaves: 4);
+            h += (int)(ridge * 6f);
+        }
+
+        return Math.Clamp(h, 2, Size - 2);
+    }
+
+    /// <summary>
+    /// Determines the biome at the given world-space XZ position using two
+    /// decorrelated noise channels (temperature and humidity).
+    /// </summary>
+    private static int ComputeBiome(float wx, float wz)
+    {
+        float temp = NoiseGenerator.Octave(wx * 0.007f, wz * 0.007f, octaves: 3);
+        float humidity = NoiseGenerator.Octave(wx * 0.009f + 500f, wz * 0.009f + 500f, octaves: 3);
+
+        if (temp > 0.65f) return BiomeDesert;
+        if (temp < 0.30f) return BiomeSnowy;
+        if (humidity < 0.35f && temp < 0.55f) return BiomeMountains;
+        if (humidity > 0.60f) return BiomeForest;
+        return BiomePlains;
+    }
+
+    /// <summary>
+    /// Generates realistic terrain: biome-based surface blocks, sea-level water,
+    /// sandy beaches, mountain peaks, cross-chunk oak trees, and ore clusters.
     /// </summary>
     private void Generate()
     {
-        const float noiseScale = 0.035f;
-        const int minHeight = 6;
-        const int maxHeight = 22;
+        // Pre-compute heightmap and biome map for all 32×32 columns.
+        var surfaceMap = new int[Size * Size];
+        var biomeMap = new int[Size * Size];
+
+        int startWx = Position.X * Size;
+        int startWz = Position.Z * Size;
 
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
             {
-                // Convert local block coords to continuous world-space coords so that
-                // adjacent chunks sample the same noise field without seams.
-                float wx = Position.X * Size + x;
-                float wz = Position.Z * Size + z;
+                float wx = startWx + x;
+                float wz = startWz + z;
+                surfaceMap[x + z * Size] = ComputeSurfaceY(wx, wz);
+                biomeMap[x + z * Size] = ComputeBiome(wx, wz);
+            }
 
-                float sample = NoiseGenerator.Octave(wx * noiseScale, wz * noiseScale, octaves: 4);
-                int surfaceY = minHeight + (int)(sample * (maxHeight - minHeight));
-                surfaceY = Math.Clamp(surfaceY, 1, Size - 1);
+        // Fill blocks column by column.
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int surfaceY = surfaceMap[x + z * Size];
+                int biome = biomeMap[x + z * Size];
+
+                // Beach override: within 2 blocks of sea level replace surface with sand.
+                bool isBeach = Math.Abs(surfaceY - SeaLevel) <= 2 && biome != BiomeMountains;
+                if (isBeach) biome = BiomeDesert; // reuse sand placement logic
 
                 for (int y = 0; y < Size; y++)
                 {
                     Block b;
-                    if (y > surfaceY) b = Block.Air;
-                    else if (y == surfaceY) b = new Block { Id = 3, IsTransparent = false }; // Grass
-                    else if (y >= surfaceY - 3) b = new Block { Id = 1, IsTransparent = false }; // Dirt
-                    else b = new Block { Id = 2, IsTransparent = false }; // Stone
+
+                    if (y > surfaceY)
+                    {
+                        // Fill air below sea level with water.
+                        b = y <= SeaLevel
+                            ? new Block { Id = 15, IsTransparent = true }   // Water
+                            : Block.Air;
+                    }
+                    else if (y == surfaceY)
+                    {
+                        b = biome switch
+                        {
+                            BiomeDesert => new Block { Id = 5, IsTransparent = false }, // Sand
+                            BiomeMountains => surfaceY > 24
+                                ? new Block { Id = 16, IsTransparent = false }              // Snow cap
+                                : new Block { Id = 2, IsTransparent = false },             // Bare stone
+                            BiomeSnowy => new Block { Id = 16, IsTransparent = false }, // Snow
+                            _ => new Block { Id = 3, IsTransparent = false }, // Grass
+                        };
+                    }
+                    else if (y >= surfaceY - 3)
+                    {
+                        // Sub-surface layer (3 blocks of fill beneath the top).
+                        b = biome switch
+                        {
+                            BiomeDesert => new Block { Id = 5, IsTransparent = false },  // Sand
+                            BiomeMountains => new Block { Id = 2, IsTransparent = false },  // Stone
+                            _ => new Block { Id = 1, IsTransparent = false },  // Dirt
+                        };
+                    }
+                    else
+                    {
+                        // Stone base — inline ore replacement using a fast integer hash.
+                        float wx = startWx + x;
+                        float wz = startWz + z;
+                        uint h = (uint)((int)(wx * 374761393) ^ (y * 1274126177) ^ (int)(wz * 668265263));
+                        h = (h ^ (h >> 13)) * 1274126177u;
+                        h ^= h >> 16;
+
+                        if (y <= 12 && h % 130 == 0)
+                            b = new Block { Id = 14, IsTransparent = false }; // Iron Ore
+                        else if (y <= 18 && h % 70 == 0)
+                            b = new Block { Id = 13, IsTransparent = false }; // Coal Ore
+                        else
+                            b = new Block { Id = 2, IsTransparent = false }; // Stone
+                    }
 
                     _blocks[Index(x, y, z)] = b;
                 }
             }
+
+        // Place trees — scan an extended border region so trees whose trunks land
+        // outside this chunk still deposit leaves inside it (no cross-chunk seams).
+        for (int tz = startWz - 2; tz < startWz + Size + 2; tz++)
+            for (int tx = startWx - 2; tx < startWx + Size + 2; tx++)
+            {
+                int biome = ComputeBiome(tx, tz);
+                if (biome == BiomeDesert || biome == BiomeMountains) continue;
+
+                int treeDensity = biome == BiomeForest ? 8 : 20;
+                if (!ShouldPlaceTree(tx, tz, treeDensity)) continue;
+
+                int sy = ComputeSurfaceY(tx, tz);
+                if (sy <= SeaLevel) continue; // no aquatic trees
+
+                PlaceTreeInChunk(tx, tz, sy);
+            }
+    }
+
+    /// <summary>
+    /// Returns true when a tree trunk should be placed at the given world XZ position.
+    /// Deterministic and independent of chunk boundaries — the same world position
+    /// always returns the same answer regardless of which chunk queries it.
+    /// </summary>
+    private static bool ShouldPlaceTree(int wx, int wz, int modulo)
+    {
+        uint h = (uint)(wx * 374761393 ^ wz * 668265263);
+        h = (h ^ (h >> 13)) * 1274126177u;
+        h ^= h >> 16;
+        return h % (uint)modulo == 0;
+    }
+
+    /// <summary>
+    /// Writes a small oak tree (4-block trunk + leaf crown) centred on the world XZ
+    /// position, writing only the blocks that fall inside this chunk's [0, Size)³ bounds.
+    /// </summary>
+    private void PlaceTreeInChunk(int treeWx, int treeWz, int surfaceY)
+    {
+        int lx = treeWx - Position.X * Size;
+        int lz = treeWz - Position.Z * Size;
+
+        // Trunk: 4 log blocks directly above the surface.
+        for (int dy = 1; dy <= 4; dy++)
+        {
+            int ly = surfaceY + dy;
+            if (InBounds(lx, ly, lz))
+                _blocks[Index(lx, ly, lz)] = new Block { Id = 7, IsTransparent = false }; // Oak Log
+        }
+
+        // Leaf crown: 3×3 at trunk top − 1 and trunk top, plus single block above.
+        for (int layer = 0; layer <= 2; layer++)
+        {
+            int ly = surfaceY + 3 + layer;
+            int radius = layer == 2 ? 0 : 1; // top layer is 1×1, lower two are 3×3
+
+            for (int dz = -radius; dz <= radius; dz++)
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    int nx = lx + dx;
+                    int nz = lz + dz;
+                    if (!InBounds(nx, ly, nz)) continue;
+
+                    ref Block b = ref _blocks[Index(nx, ly, nz)];
+                    if (b.Id == 0) // don't overwrite solid blocks
+                        b = new Block { Id = 8, IsTransparent = true }; // Oak Leaves
+                }
+        }
     }
 
     // ------------------------------------------------------------------

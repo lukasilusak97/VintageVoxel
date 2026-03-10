@@ -1,0 +1,108 @@
+[
+    {
+        "id": 1,
+        "name": "Dirt",
+        "textures": { "all": "dirt" }
+    },
+    {
+        "id": 2,
+        "name": "Stone",
+        "textures": { "all": "stone" }
+    },
+    {
+        "id": 3,
+        "name": "Grass",
+        "textures": {
+            "up": "grass_block_top",
+            "down": "dirt",
+            "north": "grass_block_side",
+            "south": "grass_block_side",
+            "east": "grass_block_side",
+            "west": "grass_block_side"
+        }
+    },
+    {
+        "id": 4,
+        "name": "Torch",
+        "transparent": true,
+        "model": "torch"
+    },
+    {
+        "id": 5,
+        "name": "Sand",
+        "textures": { "all": "sand" }
+    },
+    {
+        "id": 6,
+        "name": "Gravel",
+        "textures": { "all": "gravel" }
+    },
+    {
+        "id": 7,
+        "name": "Oak Log",
+        "textures": {
+            "up": "oak_log_top",
+            "down": "oak_log_top",
+            "north": "oak_log",
+            "south": "oak_log",
+            "east": "oak_log",
+            "west": "oak_log"
+        }
+    },
+    {
+        "id": 8,
+        "name": "Oak Leaves",
+        "transparent": true,
+        "tint": "#59AE30",
+        "textures": { "all": "oak_leaves" }
+    },
+    {
+        "id": 9,
+        "name": "Oak Planks",
+        "textures": { "all": "oak_planks" }
+    },
+    {
+        "id": 10,
+        "name": "Cobblestone",
+        "textures": { "all": "cobblestone" }
+    },
+    {
+        "id": 11,
+        "name": "Glass",
+        "transparent": true,
+        "textures": { "all": "glass" }
+    },
+    {
+        "id": 12,
+        "name": "Bedrock",
+        "textures": { "all": "bedrock" }
+    },
+    {
+        "id": 13,
+        "name": "Coal Ore",
+        "textures": { "all": "coal_ore" }
+    },
+    {
+        "id": 14,
+        "name": "Iron Ore",
+        "textures": { "all": "iron_ore" }
+    },
+    {
+        "id": 15,
+        "name": "Water",
+        "transparent": true,
+        "textures": { "all": "water_still" }
+    },
+    {
+        "id": 16,
+        "name": "Snow",
+        "textures": {
+            "up": "snow",
+            "down": "dirt",
+            "north": "grass_block_snow",
+            "south": "grass_block_snow",
+            "east": "grass_block_snow",
+            "west": "grass_block_snow"
+        }
+    }
+]

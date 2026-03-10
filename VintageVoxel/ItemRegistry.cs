@@ -32,21 +32,20 @@ public static class ItemRegistry
 
         foreach (var def in defs)
         {
-            ItemType itemType = def.Type.Equals("MODEL", StringComparison.OrdinalIgnoreCase)
-                ? ItemType.Model
-                : ItemType.Block;
-
             VoxelModel? model = null;
             ModelMesh? mesh = null;
-            if (itemType == ItemType.Model)
+            ItemType itemType = ItemType.Block;
+
+            if (!string.IsNullOrEmpty(def.Model))
             {
-                string modelPath = Path.Combine(modelsDir, def.Name.ToLowerInvariant() + ".json");
+                itemType = ItemType.Model;
+                string modelPath = Path.Combine(modelsDir, def.Model.ToLowerInvariant() + ".json");
                 // Try Minecraft/Blockbench element format first; fall back to VoxelModel format.
                 if (!MinecraftModelLoader.TryLoad(modelPath, out mesh))
                     ModelLoader.TryLoad(modelPath, out model);
             }
 
-            _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.TextureId,
+            _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.BlockId,
                                       itemType, model, mesh);
         }
     }
@@ -62,7 +61,8 @@ public static class ItemRegistry
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public int MaxStackSize { get; set; }
-        public int TextureId { get; set; }
-        public string Type { get; set; } = "BLOCK";
+        public int BlockId { get; set; }
+        /// <summary>Optional model path (relative to Assets/Models/, without extension).</summary>
+        public string? Model { get; set; }
     }
 }
