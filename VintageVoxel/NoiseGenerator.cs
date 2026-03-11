@@ -16,7 +16,28 @@ public static class NoiseGenerator
 {
     // Standard Perlin permutation table — 256 pseudo-random bytes, repeated twice
     // so that out-of-range indices (xi+1) never need a modulo operation.
-    private static readonly int[] P = Build();
+    private static int[] P = Build();
+
+    /// <summary>
+    /// Reshuffles the permutation table using <paramref name="seed"/> so that
+    /// each seed produces a unique but reproducible terrain layout.
+    /// Passing 0 restores the default (fixed) Perlin permutation.
+    /// </summary>
+    public static void SetSeed(int seed)
+    {
+        if (seed == 0) { P = Build(); return; }
+        var rng = new System.Random(seed);
+        var table = new int[256];
+        for (int i = 0; i < 256; i++) table[i] = i;
+        for (int i = 255; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (table[i], table[j]) = (table[j], table[i]);
+        }
+        var p = new int[512];
+        for (int i = 0; i < 512; i++) p[i] = table[i & 255];
+        P = p;
+    }
 
     private static int[] Build()
     {

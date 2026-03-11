@@ -240,9 +240,6 @@ public sealed class WorldRenderer : IDisposable
             }
             _borders.Render(ref view, ref projection);
         }
-
-        if (gameIsPlaying)
-            RenderHotbarItems3D(fbWidth, fbHeight);
     }
 
     private void RenderChunks(Frustum frustum)
@@ -301,8 +298,9 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>
     /// Renders each occupied hotbar slot as a spinning 3-D mini item by reusing
     /// <see cref="EntityItemRenderer"/>. A tiny GL viewport is set per slot.
+    /// Must be called AFTER the 2-D HUD backgrounds so items appear on top.
     /// </summary>
-    private void RenderHotbarItems3D(int fbWidth, int fbHeight)
+    public void RenderHotbarItems3D(int fbWidth, int fbHeight)
     {
         int count = Inventory.HotbarSize;
         float totalWidth = count * GameConstants.Render.HotbarSlotSize + (count - 1) * GameConstants.Render.HotbarSlotGap;

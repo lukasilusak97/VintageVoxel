@@ -15,6 +15,7 @@ public static class BlockRegistry
 {
     // face index → int[6] atlas tile index, indexed by block ID
     private static int[][] _faceTiles = Array.Empty<int[]>();
+    private static bool[] _hasModel = Array.Empty<bool>();
     private static BlockDef[] _defs = Array.Empty<BlockDef>();
 
     // ------------------------------------------------------------------
@@ -69,17 +70,36 @@ public static class BlockRegistry
         var result = new Dictionary<string, (byte, byte, byte)>(StringComparer.OrdinalIgnoreCase);
         foreach (var def in _defs)
         {
-            if (string.IsNullOrEmpty(def.Tint)) continue;
-            string hex = def.Tint!.TrimStart('#');
-            if (hex.Length < 6) continue;
-            byte r = Convert.ToByte(hex.Substring(0, 2), 16);
-            byte g = Convert.ToByte(hex.Substring(2, 2), 16);
-            byte b = Convert.ToByte(hex.Substring(4, 2), 16);
-            for (int face = 0; face < 6; face++)
+            // Block-level tint applies to all face textures (used for uniform-texture blocks like leaves).
+            if (!string.IsNullOrEmpty(def.Tint))
             {
-                string tex = def.TextureForFace(face);
-                if (!string.IsNullOrEmpty(tex))
-                    result[tex] = (r, g, b);
+                string hex = def.Tint!.TrimStart('#');
+                if (hex.Length >= 6)
+                {
+                    byte r = Convert.ToByte(hex.Substring(0, 2), 16);
+                    byte g = Convert.ToByte(hex.Substring(2, 2), 16);
+                    byte b = Convert.ToByte(hex.Substring(4, 2), 16);
+                    for (int face = 0; face < 6; face++)
+                    {
+                        string tex = def.TextureForFace(face);
+                        if (!string.IsNullOrEmpty(tex))
+                            result[tex] = (r, g, b);
+                    }
+                }
+            }
+
+            // Per-texture tints override specific texture names without affecting shared textures.
+            if (def.TextureTints != null)
+            {
+                foreach (var (texName, hexColor) in def.TextureTints)
+                {
+                    string hex = hexColor.TrimStart('#');
+                    if (hex.Length < 6) continue;
+                    byte r = Convert.ToByte(hex.Substring(0, 2), 16);
+                    byte g = Convert.ToByte(hex.Substring(2, 2), 16);
+                    byte b = Convert.ToByte(hex.Substring(4, 2), 16);
+                    result[texName] = (r, g, b);
+                }
             }
         }
         return result;
@@ -100,6 +120,7 @@ public static class BlockRegistry
         for (int i = 0; i <= maxId; i++)
             _faceTiles[i] = new int[6]; // default: tile 0 for every face
 
+        _hasModel = new bool[maxId + 1];
         foreach (var def in _defs)
         {
             var tiles = new int[6];
@@ -109,6 +130,7 @@ public static class BlockRegistry
                 tiles[face] = !string.IsNullOrEmpty(tex) && nameToIndex.TryGetValue(tex, out int idx) ? idx : 0;
             }
             _faceTiles[def.Id] = tiles;
+            _hasModel[def.Id] = !string.IsNullOrEmpty(def.Model);
         }
     }
 
@@ -124,6 +146,12 @@ public static class BlockRegistry
     {
         if (blockId == 0 || blockId >= _faceTiles.Length) return 0;
         return _faceTiles[blockId][face & 7];
+    }
+
+    /// <summary>Returns <see langword="true"/> if the block has a 3-D model and should not be meshed as a cube.</summary>
+    public static bool HasModel(ushort blockId)
+    {
+        return blockId > 0 && blockId < _hasModel.Length && _hasModel[blockId];
     }
 
     /// <summary>Returns <see langword="true"/> if the block with the given ID is transparent.</summary>

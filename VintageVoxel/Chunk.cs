@@ -107,6 +107,8 @@ public class Chunk
     /// </summary>
     private void Generate()
     {
+        if (WorldGenConfig.FlatWorld) { GenerateFlat(); return; }
+
         const float noiseScale = 0.035f;
         const int minHeight = 6;
         const int maxHeight = 22;
@@ -134,6 +136,27 @@ public class Chunk
                     _blocks[Index(x, y, z)] = b;
                 }
             }
+    }
+
+    /// <summary>
+    /// Generates a perfectly flat world: Stone below <c>grassY-3</c>, Dirt in
+    /// the three layers below the surface, Grass on top, Air above.
+    /// The surface height is constant regardless of chunk position.
+    /// </summary>
+    private void GenerateFlat()
+    {
+        const int grassY = 5;
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+                for (int y = 0; y < Size; y++)
+                {
+                    Block b;
+                    if (y > grassY) b = Block.Air;
+                    else if (y == grassY) b = new Block { Id = 3, IsTransparent = false }; // Grass
+                    else if (y >= grassY - 3) b = new Block { Id = 1, IsTransparent = false }; // Dirt
+                    else b = new Block { Id = 2, IsTransparent = false }; // Stone
+                    _blocks[Index(x, y, z)] = b;
+                }
     }
 
     // ------------------------------------------------------------------

@@ -129,7 +129,7 @@ public static class ChunkMeshBuilder
                 for (int x = 0; x < Chunk.Size; x++)
                 {
                     ref Block block = ref chunk.GetBlock(x, y, z);
-                    if (block.Id == 0) // skip air only; transparent non-air blocks (leaves, water, glass) are meshed below
+                    if (block.Id == 0 || BlockRegistry.HasModel(block.Id)) // skip air and model blocks (rendered separately)
                         continue;
 
                     // Phase 13: chiseled blocks are meshed at sub-voxel granularity.
@@ -245,28 +245,28 @@ public static class ChunkMeshBuilder
                 AddV(verts, x0, y0, z1, u0, 1f, light[3], ao[3]);
                 break;
             case 2: // North (-Z)
-                AddV(verts, x0, y0, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x0, y1, z0, u0, 1f, light[1], ao[1]);
-                AddV(verts, x1, y1, z0, u1, 1f, light[2], ao[2]);
-                AddV(verts, x1, y0, z0, u1, 0f, light[3], ao[3]);
+                AddV(verts, x0, y0, z0, u0, 1f, light[0], ao[0]);
+                AddV(verts, x0, y1, z0, u0, 0f, light[1], ao[1]);
+                AddV(verts, x1, y1, z0, u1, 0f, light[2], ao[2]);
+                AddV(verts, x1, y0, z0, u1, 1f, light[3], ao[3]);
                 break;
             case 3: // South (+Z)
-                AddV(verts, x1, y0, z1, u0, 0f, light[0], ao[0]);
-                AddV(verts, x1, y1, z1, u0, 1f, light[1], ao[1]);
-                AddV(verts, x0, y1, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x0, y0, z1, u1, 0f, light[3], ao[3]);
+                AddV(verts, x1, y0, z1, u0, 1f, light[0], ao[0]);
+                AddV(verts, x1, y1, z1, u0, 0f, light[1], ao[1]);
+                AddV(verts, x0, y1, z1, u1, 0f, light[2], ao[2]);
+                AddV(verts, x0, y0, z1, u1, 1f, light[3], ao[3]);
                 break;
             case 4: // West (-X)
-                AddV(verts, x0, y0, z1, u0, 0f, light[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, 1f, light[1], ao[1]);
-                AddV(verts, x0, y1, z0, u1, 1f, light[2], ao[2]);
-                AddV(verts, x0, y0, z0, u1, 0f, light[3], ao[3]);
+                AddV(verts, x0, y0, z1, u0, 1f, light[0], ao[0]);
+                AddV(verts, x0, y1, z1, u0, 0f, light[1], ao[1]);
+                AddV(verts, x0, y1, z0, u1, 0f, light[2], ao[2]);
+                AddV(verts, x0, y0, z0, u1, 1f, light[3], ao[3]);
                 break;
             case 5: // East (+X)
-                AddV(verts, x1, y0, z0, u0, 0f, light[0], ao[0]);
-                AddV(verts, x1, y1, z0, u0, 1f, light[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, 1f, light[2], ao[2]);
-                AddV(verts, x1, y0, z1, u1, 0f, light[3], ao[3]);
+                AddV(verts, x1, y0, z0, u0, 1f, light[0], ao[0]);
+                AddV(verts, x1, y1, z0, u0, 0f, light[1], ao[1]);
+                AddV(verts, x1, y1, z1, u1, 0f, light[2], ao[2]);
+                AddV(verts, x1, y0, z1, u1, 1f, light[3], ao[3]);
                 break;
         }
 
@@ -412,28 +412,28 @@ public static class ChunkMeshBuilder
                 AddV(verts, x0, y0, z1, u0, 1f, 1f, 1f);
                 break;
             case 2: // North (-Z)
-                AddV(verts, x0, y0, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x0, y1, z0, u0, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z0, u1, 1f, 1f, 1f);
-                AddV(verts, x1, y0, z0, u1, 0f, 1f, 1f);
+                AddV(verts, x0, y0, z0, u0, 1f, 1f, 1f);
+                AddV(verts, x0, y1, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x1, y1, z0, u1, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z0, u1, 1f, 1f, 1f);
                 break;
             case 3: // South (+Z)
-                AddV(verts, x1, y0, z1, u0, 0f, 1f, 1f);
-                AddV(verts, x1, y1, z1, u0, 1f, 1f, 1f);
-                AddV(verts, x0, y1, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x0, y0, z1, u1, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z1, u0, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z1, u0, 0f, 1f, 1f);
+                AddV(verts, x0, y1, z1, u1, 0f, 1f, 1f);
+                AddV(verts, x0, y0, z1, u1, 1f, 1f, 1f);
                 break;
             case 4: // West (-X)
-                AddV(verts, x0, y0, z1, u0, 0f, 1f, 1f);
-                AddV(verts, x0, y1, z1, u0, 1f, 1f, 1f);
-                AddV(verts, x0, y1, z0, u1, 1f, 1f, 1f);
-                AddV(verts, x0, y0, z0, u1, 0f, 1f, 1f);
+                AddV(verts, x0, y0, z1, u0, 1f, 1f, 1f);
+                AddV(verts, x0, y1, z1, u0, 0f, 1f, 1f);
+                AddV(verts, x0, y1, z0, u1, 0f, 1f, 1f);
+                AddV(verts, x0, y0, z0, u1, 1f, 1f, 1f);
                 break;
             case 5: // East (+X)
-                AddV(verts, x1, y0, z0, u0, 0f, 1f, 1f);
-                AddV(verts, x1, y1, z0, u0, 1f, 1f, 1f);
-                AddV(verts, x1, y1, z1, u1, 1f, 1f, 1f);
-                AddV(verts, x1, y0, z1, u1, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z0, u0, 1f, 1f, 1f);
+                AddV(verts, x1, y1, z0, u0, 0f, 1f, 1f);
+                AddV(verts, x1, y1, z1, u1, 0f, 1f, 1f);
+                AddV(verts, x1, y0, z1, u1, 1f, 1f, 1f);
                 break;
         }
 

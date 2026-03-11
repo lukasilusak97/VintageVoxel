@@ -36,6 +36,7 @@
     <Compile Remove="WorldPersistence.cs" />
     <Compile Remove="LightEngine.cs" />
     <Compile Remove="Raycaster.cs" />
+    <Compile Remove="WorldGenConfig.cs" />
   </ItemGroup>
 
   <!-- Copy GLSL shader files to the output directory so they're found at runtime

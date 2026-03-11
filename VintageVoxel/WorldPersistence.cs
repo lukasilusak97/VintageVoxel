@@ -38,12 +38,89 @@ public static class WorldPersistence
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
     private const byte Version = 1;
 
+    /// <summary>Root directory that contains all per-world save folders.</summary>
+    public static string SavesRootPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "VintageVoxel", "Saves");
+
     /// <summary>
     /// Default save folder: <c>%AppData%\VintageVoxel\Saves\default</c>.
     /// </summary>
     public static string DefaultSavePath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "VintageVoxel", "Saves", "default");
+
+    /// <summary>Returns the save directory for a world with the given display name.</summary>
+    public static string GetSavePath(string worldName) =>
+        Path.Combine(SavesRootPath, SanitizeWorldName(worldName));
+
+    // -------------------------------------------------------------------------
+    // World listing and metadata
+    // -------------------------------------------------------------------------
+
+    /// <summary>Identifies a saved world by its folder name and user-visible title.</summary>
+    public sealed class WorldInfo
+    {
+        public string FolderName { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string SavePath { get; set; } = "";
+    }
+
+    /// <summary>Returns metadata for every world folder found under <see cref="SavesRootPath"/>.</summary>
+    public static List<WorldInfo> ListWorlds()
+    {
+        var result = new List<WorldInfo>();
+        if (!Directory.Exists(SavesRootPath)) return result;
+        foreach (var dir in Directory.EnumerateDirectories(SavesRootPath))
+        {
+            var folderName = Path.GetFileName(dir) ?? "world";
+            var (displayName, _, _) = LoadMeta(dir);
+            result.Add(new WorldInfo { FolderName = folderName, DisplayName = displayName, SavePath = dir });
+        }
+        return result;
+    }
+
+    /// <summary>Writes a small <c>meta.txt</c> alongside the chunk files.</summary>
+    public static void SaveMeta(string folder, string displayName, int seed, bool flat)
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllLines(Path.Combine(folder, "meta.txt"), new string[]
+        {
+            $"name={displayName}",
+            $"seed={seed}",
+            $"flat={flat}"
+        });
+    }
+
+    /// <summary>
+    /// Reads <c>meta.txt</c> from <paramref name="folder"/>.
+    /// Returns sensible defaults when the file is absent.
+    /// </summary>
+    public static (string displayName, int seed, bool flat) LoadMeta(string folder)
+    {
+        string displayName = Path.GetFileName(folder) ?? "world";
+        int seed = 0;
+        bool flat = false;
+        string metaPath = Path.Combine(folder, "meta.txt");
+        if (!File.Exists(metaPath)) return (displayName, seed, flat);
+        foreach (var line in File.ReadAllLines(metaPath))
+        {
+            if (line.StartsWith("name=", StringComparison.Ordinal)) displayName = line["name=".Length..];
+            else if (line.StartsWith("seed=", StringComparison.Ordinal)) int.TryParse(line["seed=".Length..], out seed);
+            else if (line.StartsWith("flat=", StringComparison.Ordinal)) bool.TryParse(line["flat=".Length..], out flat);
+        }
+        return (displayName, seed, flat);
+    }
+
+    private static string SanitizeWorldName(string name)
+    {
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());
+        var sb = new System.Text.StringBuilder();
+        foreach (char c in name)
+            if (!invalid.Contains(c)) sb.Append(c);
+        var result = sb.ToString().Trim();
+        return string.IsNullOrEmpty(result) ? "world" : result;
+    }
 
     // -------------------------------------------------------------------------
     // Save

@@ -19,7 +19,8 @@
             "south": "grass_block_side",
             "east": "grass_block_side",
             "west": "grass_block_side"
-        }
+        },
+        "textureTints": { "grass_block_top": "#79C05A" }
     },
     {
         "id": 4,

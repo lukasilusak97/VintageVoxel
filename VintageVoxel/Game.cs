@@ -27,10 +27,23 @@ public class Game : GameWindow
     private DebugState _debugState = null!;
     private bool _debugVisible = false;
 
-    private readonly string _savePath = WorldPersistence.DefaultSavePath;
+    private string _savePath = WorldPersistence.DefaultSavePath;
     private string? _lastSaveStatus;
 
     private GameState _gameState = GameState.MainMenu;
+
+    // ─── Main-menu sub-pages ──────────────────────────────────────────────────
+    private enum MenuPage { Main, NewWorld, LoadWorld }
+    private MenuPage _menuPage = MenuPage.Main;
+
+    // New-world form
+    private string _newWorldName = "New World";
+    private string _newWorldSeedStr = "0";
+    private int _newWorldType = 0;  // 0 = Normal, 1 = Flat
+
+    // Load-world list
+    private List<WorldPersistence.WorldInfo> _worldList = new();
+    private int _selectedWorldIndex = -1;
 
     private readonly Inventory _inventory = new(Inventory.HotbarSize);
     private HUDRenderer _hud = null!;
@@ -190,6 +203,7 @@ public class Game : GameWindow
         if (_gameState == GameState.Playing)
         {
             _hud.Render(_inventory, _atlas, FramebufferSize.X, FramebufferSize.Y);
+            _worldRenderer.RenderHotbarItems3D(FramebufferSize.X, FramebufferSize.Y);
             DrawHotbarCounts();
         }
         Profiler.End("HUD");
@@ -331,26 +345,52 @@ public class Game : GameWindow
     }
 
     /// <summary>
-    /// Deletes the current save, builds a fresh world from scratch, and enters gameplay.
+    /// Creates a brand-new world: applies generation settings, wipes any existing
+    /// save for that name, writes metadata, then enters gameplay.
     /// </summary>
-    private void ResetWorld()
+    private void StartNewWorld(string name, int seed, bool flat)
     {
-        // Wipe saved chunks so the new world generates completely fresh terrain.
+        WorldGenConfig.FlatWorld = flat;
+        NoiseGenerator.SetSeed(seed);
+        _savePath = WorldPersistence.GetSavePath(name);
         if (Directory.Exists(_savePath))
             Directory.Delete(_savePath, recursive: true);
+        WorldPersistence.SaveMeta(_savePath, name, seed, flat);
+        RebuildWorld();
+    }
 
-        // Release all chunk GPU meshes from the old world.
+    /// <summary>
+    /// Loads an existing saved world: restores its generation settings for newly
+    /// streamed chunks, then enters gameplay.
+    /// </summary>
+    private void LoadExistingWorld(WorldPersistence.WorldInfo info)
+    {
+        _savePath = info.SavePath;
+        var (_, seed, flat) = WorldPersistence.LoadMeta(_savePath);
+        WorldGenConfig.FlatWorld = flat;
+        NoiseGenerator.SetSeed(seed);
+        RebuildWorld();
+    }
+
+    /// <summary>
+    /// Tears down the current world and renderer, builds a fresh world using the
+    /// current <see cref="_savePath"/> and world-gen settings, loads any saved
+    /// chunks from disk, then transitions to <see cref="GameState.Playing"/>.
+    /// </summary>
+    private void RebuildWorld()
+    {
         _worldRenderer.Dispose();
-
-        // New world + reset camera to a sensible starting position above the terrain.
         _world = new World();
         _camera.Position = new Vector3(16f, 35f, 16f);
 
-        // Initial chunk generation (no save files to load).
         _world.Update(_camera.Position, out var initial, out _);
+        foreach (var key in initial)
+        {
+            if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
+                _world.ReplaceChunk(key, saved);
+        }
         LightEngine.PropagateSunlight(_world);
 
-        // Fresh renderer wired to the new world.
         _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,
                                            _entityRenderer, _inventory);
         foreach (var key in initial)
@@ -363,7 +403,7 @@ public class Game : GameWindow
         _entityItems.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _inventory,
-                                                _worldRenderer, _entityItems, _savePath);
+                                              _worldRenderer, _entityItems, _savePath);
         _lastSaveStatus = null;
         TransitionToPlaying();
     }
@@ -406,40 +446,159 @@ public class Game : GameWindow
     }
 
     /// <summary>
-    /// Renders the centered main-menu ImGui overlay.
+    /// Routes to whichever main-menu sub-page is currently active.
     /// Called from <see cref="OnRenderFrame"/> when state is <see cref="GameState.MainMenu"/>.
     /// </summary>
     private void DrawMainMenu()
     {
-        var displaySize = ImGui.GetIO().DisplaySize;
+        switch (_menuPage)
+        {
+            case MenuPage.Main: DrawMainMenuPage(); break;
+            case MenuPage.NewWorld: DrawNewWorldPage(); break;
+            case MenuPage.LoadWorld: DrawLoadWorldPage(); break;
+        }
+    }
+
+    /// <summary>Helper: positions and opens a centered, auto-sized ImGui window.</summary>
+    private static void BeginCenteredWindow(string id)
+    {
+        var ds = ImGui.GetIO().DisplaySize;
         ImGui.SetNextWindowPos(
-            new System.Numerics.Vector2(displaySize.X * 0.5f, displaySize.Y * 0.5f),
+            new System.Numerics.Vector2(ds.X * 0.5f, ds.Y * 0.5f),
             ImGuiCond.Always,
             new System.Numerics.Vector2(0.5f, 0.5f));
         ImGui.SetNextWindowBgAlpha(0.92f);
-        ImGui.Begin("##mainmenu",
+        ImGui.Begin(id,
             ImGuiWindowFlags.NoMove |
             ImGuiWindowFlags.NoDecoration |
             ImGuiWindowFlags.AlwaysAutoResize |
             ImGuiWindowFlags.NoSavedSettings);
+    }
+
+    private void DrawMainMenuPage()
+    {
+        BeginCenteredWindow("##mainmenu");
 
         ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "VintageVoxel");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
-        if (ImGui.Button("Play", new System.Numerics.Vector2(220f, 40f)))
-            TransitionToPlaying();
+        if (ImGui.Button("New World", new System.Numerics.Vector2(220f, 40f)))
+        {
+            _newWorldName = "New World";
+            _newWorldSeedStr = "0";
+            _newWorldType = 0;
+            _menuPage = MenuPage.NewWorld;
+        }
 
         ImGui.Spacing();
 
-        if (ImGui.Button("New World", new System.Numerics.Vector2(220f, 40f)))
-            ResetWorld();
+        if (ImGui.Button("Load World", new System.Numerics.Vector2(220f, 40f)))
+        {
+            _worldList = WorldPersistence.ListWorlds();
+            _selectedWorldIndex = _worldList.Count > 0 ? 0 : -1;
+            _menuPage = MenuPage.LoadWorld;
+        }
 
         ImGui.Spacing();
 
         if (ImGui.Button("Quit", new System.Numerics.Vector2(220f, 40f)))
             Close();
+
+        ImGui.End();
+    }
+
+    private void DrawNewWorldPage()
+    {
+        BeginCenteredWindow("##newworld");
+
+        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Create New World");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.Text("World Name");
+        ImGui.SetNextItemWidth(260f);
+        ImGui.InputText("##wname", ref _newWorldName, 64);
+        ImGui.Spacing();
+
+        ImGui.Text("World Type");
+        ImGui.RadioButton("Normal Generation", ref _newWorldType, 0);
+        ImGui.RadioButton("Flat World", ref _newWorldType, 1);
+        ImGui.Spacing();
+
+        if (_newWorldType == 0)
+        {
+            ImGui.Text("Seed  (0 = default)");
+            ImGui.SetNextItemWidth(260f);
+            ImGui.InputText("##wseed", ref _newWorldSeedStr, 20);
+            ImGui.Spacing();
+        }
+
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (ImGui.Button("Create World", new System.Numerics.Vector2(160f, 36f)))
+        {
+            if (!int.TryParse(_newWorldSeedStr.Trim(), out int seed))
+                seed = Math.Abs(_newWorldSeedStr.GetHashCode());
+            if (string.IsNullOrWhiteSpace(_newWorldName))
+                _newWorldName = "New World";
+            StartNewWorld(_newWorldName, seed, _newWorldType == 1);
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Back", new System.Numerics.Vector2(80f, 36f)))
+            _menuPage = MenuPage.Main;
+
+        ImGui.End();
+    }
+
+    private void DrawLoadWorldPage()
+    {
+        BeginCenteredWindow("##loadworld");
+
+        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Load World");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (_worldList.Count == 0)
+        {
+            ImGui.TextDisabled("No saved worlds found.");
+        }
+        else
+        {
+            if (ImGui.BeginListBox("##worlds", new System.Numerics.Vector2(300f, 180f)))
+            {
+                for (int i = 0; i < _worldList.Count; i++)
+                {
+                    bool selected = _selectedWorldIndex == i;
+                    if (ImGui.Selectable(_worldList[i].DisplayName, selected))
+                        _selectedWorldIndex = i;
+                    if (selected)
+                        ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndListBox();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        bool canLoad = _selectedWorldIndex >= 0 && _selectedWorldIndex < _worldList.Count;
+        if (!canLoad) ImGui.BeginDisabled();
+        if (ImGui.Button("Play", new System.Numerics.Vector2(120f, 36f)) && canLoad)
+            LoadExistingWorld(_worldList[_selectedWorldIndex]);
+        if (!canLoad) ImGui.EndDisabled();
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Back", new System.Numerics.Vector2(80f, 36f)))
+            _menuPage = MenuPage.Main;
 
         ImGui.End();
     }
@@ -481,7 +640,14 @@ public class Game : GameWindow
         ImGui.Spacing();
 
         if (ImGui.Button("New World", new System.Numerics.Vector2(220f, 40f)))
-            ResetWorld();
+        {
+            _newWorldName = "New World";
+            _newWorldSeedStr = "0";
+            _newWorldType = 0;
+            _menuPage = MenuPage.NewWorld;
+            _gameState = GameState.MainMenu;
+            CursorState = CursorState.Normal;
+        }
 
         ImGui.Spacing();
 

@@ -17,7 +17,12 @@ public sealed record BlockDef(
 
     bool Transparent = false,
     string? Model = null,
-    string? Tint = null)
+    string? Tint = null,
+
+    /// <summary>Per-texture tint overrides. Maps texture name to a hex color string (e.g. "#79C05A").
+    /// Takes precedence over the block-level <see cref="Tint"/> for the named texture.</summary>
+    [property: JsonPropertyName("textureTints")]
+    Dictionary<string, string>? TextureTints = null)
 {
     /// <summary>
     /// Returns the texture name for the given face index.

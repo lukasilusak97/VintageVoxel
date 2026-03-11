@@ -59,28 +59,28 @@ internal static class FaceEmitter
                 Add(verts, x0, y0, z1, u0, 1f, light[3], ao[3]);
                 break;
             case 2: // North (-Z)
-                Add(verts, x0, y0, z0, u0, 0f, light[0], ao[0]);
-                Add(verts, x0, y1, z0, u0, 1f, light[1], ao[1]);
-                Add(verts, x1, y1, z0, u1, 1f, light[2], ao[2]);
-                Add(verts, x1, y0, z0, u1, 0f, light[3], ao[3]);
+                Add(verts, x0, y0, z0, u0, 1f, light[0], ao[0]);
+                Add(verts, x0, y1, z0, u0, 0f, light[1], ao[1]);
+                Add(verts, x1, y1, z0, u1, 0f, light[2], ao[2]);
+                Add(verts, x1, y0, z0, u1, 1f, light[3], ao[3]);
                 break;
             case 3: // South (+Z)
-                Add(verts, x1, y0, z1, u0, 0f, light[0], ao[0]);
-                Add(verts, x1, y1, z1, u0, 1f, light[1], ao[1]);
-                Add(verts, x0, y1, z1, u1, 1f, light[2], ao[2]);
-                Add(verts, x0, y0, z1, u1, 0f, light[3], ao[3]);
+                Add(verts, x1, y0, z1, u0, 1f, light[0], ao[0]);
+                Add(verts, x1, y1, z1, u0, 0f, light[1], ao[1]);
+                Add(verts, x0, y1, z1, u1, 0f, light[2], ao[2]);
+                Add(verts, x0, y0, z1, u1, 1f, light[3], ao[3]);
                 break;
             case 4: // West (-X)
-                Add(verts, x0, y0, z1, u0, 0f, light[0], ao[0]);
-                Add(verts, x0, y1, z1, u0, 1f, light[1], ao[1]);
-                Add(verts, x0, y1, z0, u1, 1f, light[2], ao[2]);
-                Add(verts, x0, y0, z0, u1, 0f, light[3], ao[3]);
+                Add(verts, x0, y0, z1, u0, 1f, light[0], ao[0]);
+                Add(verts, x0, y1, z1, u0, 0f, light[1], ao[1]);
+                Add(verts, x0, y1, z0, u1, 0f, light[2], ao[2]);
+                Add(verts, x0, y0, z0, u1, 1f, light[3], ao[3]);
                 break;
             case 5: // East (+X)
-                Add(verts, x1, y0, z0, u0, 0f, light[0], ao[0]);
-                Add(verts, x1, y1, z0, u0, 1f, light[1], ao[1]);
-                Add(verts, x1, y1, z1, u1, 1f, light[2], ao[2]);
-                Add(verts, x1, y0, z1, u1, 0f, light[3], ao[3]);
+                Add(verts, x1, y0, z0, u0, 1f, light[0], ao[0]);
+                Add(verts, x1, y1, z0, u0, 0f, light[1], ao[1]);
+                Add(verts, x1, y1, z1, u1, 0f, light[2], ao[2]);
+                Add(verts, x1, y0, z1, u1, 1f, light[3], ao[3]);
                 break;
         }
 
