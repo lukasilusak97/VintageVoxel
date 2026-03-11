@@ -2,5 +2,17 @@
     { "id": 1, "name": "Dirt", "maxStackSize": 64, "blockId": 1 },
     { "id": 2, "name": "Stone", "maxStackSize": 64, "blockId": 2 },
     { "id": 3, "name": "Grass", "maxStackSize": 64, "blockId": 3 },
-    { "id": 4, "name": "Torch", "maxStackSize": 16, "blockId": 4, "model": "Item/torch" }
+    { "id": 4, "name": "Torch", "maxStackSize": 16, "blockId": 4, "model": "Item/torch" },
+    { "id": 5, "name": "Sand", "maxStackSize": 64, "blockId": 5 },
+    { "id": 6, "name": "Gravel", "maxStackSize": 64, "blockId": 6 },
+    { "id": 7, "name": "Oak Log", "maxStackSize": 64, "blockId": 7 },
+    { "id": 8, "name": "Oak Leaves", "maxStackSize": 64, "blockId": 8 },
+    { "id": 9, "name": "Oak Planks", "maxStackSize": 64, "blockId": 9 },
+    { "id": 10, "name": "Cobblestone", "maxStackSize": 64, "blockId": 10 },
+    { "id": 11, "name": "Glass", "maxStackSize": 64, "blockId": 11 },
+    { "id": 12, "name": "Bedrock", "maxStackSize": 64, "blockId": 12 },
+    { "id": 13, "name": "Coal Ore", "maxStackSize": 64, "blockId": 13 },
+    { "id": 14, "name": "Iron Ore", "maxStackSize": 64, "blockId": 14 },
+    { "id": 15, "name": "Water", "maxStackSize": 64, "blockId": 15 },
+    { "id": 16, "name": "Snow", "maxStackSize": 64, "blockId": 16 }
 ]

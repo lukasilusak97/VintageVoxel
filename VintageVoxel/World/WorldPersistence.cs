@@ -113,6 +113,31 @@ public static class WorldPersistence
         return (displayName, seed, flat);
     }
 
+    // -------------------------------------------------------------------------
+    // Player config
+    // -------------------------------------------------------------------------
+
+    private static string PlayerConfigPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "VintageVoxel", "player.cfg");
+
+    /// <summary>Persists the player's display name across sessions.</summary>
+    public static void SavePlayerName(string name)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(PlayerConfigPath)!);
+        File.WriteAllText(PlayerConfigPath, $"name={name}");
+    }
+
+    /// <summary>Returns the saved player name, or <paramref name="defaultName"/> if none saved.</summary>
+    public static string LoadPlayerName(string defaultName = "Player")
+    {
+        if (!File.Exists(PlayerConfigPath)) return defaultName;
+        foreach (var line in File.ReadAllLines(PlayerConfigPath))
+            if (line.StartsWith("name=", StringComparison.Ordinal))
+                return line["name=".Length..];
+        return defaultName;
+    }
+
     private static string SanitizeWorldName(string name)
     {
         var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());

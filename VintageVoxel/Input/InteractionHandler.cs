@@ -1,6 +1,7 @@
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
+using VintageVoxel.Networking;
 using VintageVoxel.Rendering;
 
 namespace VintageVoxel;
@@ -18,6 +19,14 @@ public sealed class InteractionHandler
     private readonly WorldRenderer _renderer;
     private readonly List<EntityItem> _entityItems;
     private readonly string _savePath;
+
+    /// <summary>
+    /// When set, block actions are sent to the server for authoritative
+    /// application. The server response will update the local world via
+    /// <see cref="GameClient.OnBlockUpdate"/>. We still apply optimistically
+    /// locally for responsiveness.
+    /// </summary>
+    public GameClient? NetworkClient { get; set; }
 
     public InteractionHandler(World world, Camera camera, Inventory inventory,
                               WorldRenderer renderer, List<EntityItem> entityItems, string savePath)
@@ -69,6 +78,7 @@ public sealed class InteractionHandler
                     LightEngine.UpdateAtBlock(hit.BlockPos, _world);
                     _renderer.RemovePlacedModel(hit.BlockPos);
                     SpawnBlockDrop(brokenId, hit.BlockPos);
+                    NetworkClient?.SendPlayerAction(PlayerActionKind.Break, hit.BlockPos, 0, Vector3i.Zero);
                 }
                 _renderer.RebuildAffectedChunks(hit.BlockPos);
             }
@@ -160,6 +170,7 @@ public sealed class InteractionHandler
             LightEngine.UpdateAtBlock(blockPos, _world);
             _renderer.AddPlacedModel(blockPos, held.Item);
             _renderer.RebuildAffectedChunks(blockPos);
+            NetworkClient?.SendPlayerAction(PlayerActionKind.Place, blockPos, (ushort)held.Item.Id, Vector3i.Zero);
             return;
         }
 
@@ -167,6 +178,7 @@ public sealed class InteractionHandler
         _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
         LightEngine.UpdateAtBlock(blockPos, _world);
         _renderer.RebuildAffectedChunks(blockPos);
+        NetworkClient?.SendPlayerAction(PlayerActionKind.Place, blockPos, id, Vector3i.Zero);
     }
 
     private void SpawnBlockDrop(ushort blockId, Vector3i blockPos)

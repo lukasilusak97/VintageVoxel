@@ -26,6 +26,11 @@ public class Camera
     private Vector3 _right = Vector3.UnitX;
     private Vector3 _up = Vector3.UnitY;
 
+    /// <summary>Current yaw in radians. Used by the network layer to broadcast player orientation.</summary>
+    public float Yaw => _yaw;
+    /// <summary>Current pitch in radians. Used by the network layer to broadcast player orientation.</summary>
+    public float Pitch => _pitch;
+
     // --- Projection parameters ---
     private float _fovY;         // Vertical field-of-view in radians.
     private float _aspectRatio;

@@ -4,8 +4,10 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
+using VintageVoxel.Networking;
 using VintageVoxel.Physics;
 using VintageVoxel.Rendering;
+using VintageVoxel.UI;
 
 namespace VintageVoxel;
 
@@ -33,7 +35,7 @@ public class Game : GameWindow
     private GameState _gameState = GameState.MainMenu;
 
     // ─── Main-menu sub-pages ──────────────────────────────────────────────────
-    private enum MenuPage { Main, NewWorld, LoadWorld }
+    private enum MenuPage { Main, NewWorld, LoadWorld, Multiplayer }
     private MenuPage _menuPage = MenuPage.Main;
 
     // New-world form
@@ -57,6 +59,24 @@ public class Game : GameWindow
 
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
+
+    // ─── Multiplayer ──────────────────────────────────────────────────────────
+    private GameServer? _gameServer;
+    private GameClient? _gameClient;
+    private readonly LanDiscovery _lanDiscovery = new();
+    private readonly Dictionary<int, RemotePlayer> _remotePlayers = new();
+    private RemotePlayerRenderer _remotePlayerRenderer = null!;
+    private readonly ChatWindow _chatWindow = new();
+
+    // Multiplayer menu form state
+    private string _playerName = "Player";  // loaded from disk in OnLoad
+    private string _joinIp = "127.0.0.1";
+    // Host-existing-world list (populated when Multiplayer page opens)
+    private List<WorldPersistence.WorldInfo> _hostWorldList = new();
+    private int _selectedHostWorldIndex = -1;
+    private string _multiStatus = "";
+    private float _stateTimer;            // seconds since last SendPlayerState
+    private const float StateInterval = 1f / 20f; // 20 Hz
 
     public Game(GameWindowSettings gameWindowSettings, NativeWindowSettings nativeWindowSettings)
         : base(gameWindowSettings, nativeWindowSettings)
@@ -109,6 +129,9 @@ public class Game : GameWindow
         _debugWindow = new DebugWindow();
         _debugState = new DebugState();
 
+        _remotePlayerRenderer = new RemotePlayerRenderer();
+        _playerName = WorldPersistence.LoadPlayerName("Player");
+
         ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
 
         // Restore a saved player or give a fresh one a starter item.
@@ -153,6 +176,11 @@ public class Game : GameWindow
         _imgui.Update(this, dt);
         Profiler.End("ImGui Update");
 
+        // Tick networking and LAN discovery in every state so connection handshake
+        // completes and transitions to Playing even from the main menu.
+        _gameClient?.Tick();
+        _lanDiscovery.Poll();
+
         if (_gameState != GameState.Playing)
             return;
 
@@ -194,6 +222,26 @@ public class Game : GameWindow
             _firstMove = true;
         }
 
+        // ── Multiplayer tick ─────────────────────────────────────────────────
+        if (_gameClient != null)
+        {
+            // Send position at 20 Hz.
+            _stateTimer += dt;
+            if (_stateTimer >= StateInterval)
+            {
+                _stateTimer = 0f;
+                _gameClient.SendPlayerState(_camera.FeetPosition, _camera.Yaw, _camera.Pitch);
+            }
+
+            // Advance interpolation for every remote player.
+            foreach (var rp in _remotePlayers.Values)
+                rp.Update(dt);
+
+            // Return cursor to game when chat input closes.
+            if (!_chatWindow.IsInputOpen && CursorState == CursorState.Normal && !_debugVisible && !_inventoryWindow.IsOpen)
+                CursorState = CursorState.Grabbed;
+        }
+
         _worldStreamer.Update(_camera.Position);
     }
 
@@ -208,6 +256,11 @@ public class Game : GameWindow
         _worldRenderer.Render(_camera, _entityItems, _debugState,
                               _gameState == GameState.Playing,
                               FramebufferSize.X, FramebufferSize.Y);
+
+        // Render remote player box-man models (before ImGui so tags draw over them).
+        if (_gameState == GameState.Playing && _remotePlayers.Count > 0)
+            _remotePlayerRenderer.Render(_remotePlayers.Values, _camera,
+                                         FramebufferSize.X, FramebufferSize.Y);
 
         Profiler.Begin("HUD");
         if (_gameState == GameState.Playing)
@@ -235,6 +288,14 @@ public class Game : GameWindow
             DrawMainMenu();
         else if (_gameState == GameState.Paused)
             DrawPauseMenu();
+
+        // Chat overlay + remote-player name tags (multiplayer only).
+        if (_gameState == GameState.Playing && _gameClient != null)
+        {
+            _chatWindow.Draw((float)args.Time, ImGui.GetIO().DisplaySize.X, ImGui.GetIO().DisplaySize.Y);
+            _remotePlayerRenderer.RenderNameTags(_remotePlayers.Values, _camera,
+                                                  FramebufferSize.X, FramebufferSize.Y);
+        }
 
         Profiler.Begin("ImGui");
         _imgui.Render();
@@ -327,6 +388,15 @@ public class Game : GameWindow
 
         if (e.Key == Keys.Q && _gameState == GameState.Playing)
             _interaction.HandleItemDrop();
+
+        // Open chat input in multiplayer.
+        if (e.Key == Keys.T && _gameState == GameState.Playing && _gameClient != null)
+        {
+            _chatWindow.OpenInput();
+            // Release cursor while typing.
+            CursorState = CursorState.Normal;
+            _firstMove = true;
+        }
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
@@ -361,10 +431,16 @@ public class Game : GameWindow
     {
         base.OnUnload();
 
+        // Disconnect / stop server before saving so no save races occur.
+        _gameClient?.Disconnect();
+        _gameServer?.Stop();
+        _lanDiscovery.Dispose();
+
         WorldPersistence.SavePlayer(_savePath, _player, _camera.Position);
         WorldPersistence.SaveAll(_savePath, _world);
 
         GL.BindVertexArray(0);
+        _remotePlayerRenderer?.Dispose();
         _worldRenderer.Dispose();
         _atlas.Dispose();
         _shader.Dispose();
@@ -455,6 +531,7 @@ public class Game : GameWindow
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
+        _interaction.NetworkClient = null; // single-player: no networking
         _lastSaveStatus = null;
         TransitionToPlaying();
     }
@@ -631,6 +708,7 @@ public class Game : GameWindow
             case MenuPage.Main: DrawMainMenuPage(); break;
             case MenuPage.NewWorld: DrawNewWorldPage(); break;
             case MenuPage.LoadWorld: DrawLoadWorldPage(); break;
+            case MenuPage.Multiplayer: DrawMultiplayerPage(); break;
         }
     }
 
@@ -674,6 +752,18 @@ public class Game : GameWindow
             _worldList = WorldPersistence.ListWorlds();
             _selectedWorldIndex = _worldList.Count > 0 ? 0 : -1;
             _menuPage = MenuPage.LoadWorld;
+
+        }
+
+        ImGui.Spacing();
+
+        if (ImGui.Button("Multiplayer", new System.Numerics.Vector2(220f, 40f)))
+        {
+            _multiStatus = "";
+            _hostWorldList = WorldPersistence.ListWorlds();
+            _selectedHostWorldIndex = _hostWorldList.Count > 0 ? 0 : -1;
+            _lanDiscovery.StartSearch();
+            _menuPage = MenuPage.Multiplayer;
         }
 
         ImGui.Spacing();
@@ -776,6 +866,245 @@ public class Game : GameWindow
             _menuPage = MenuPage.Main;
 
         ImGui.End();
+    }
+
+    private void DrawMultiplayerPage()
+    {
+        BeginCenteredWindow("##multiplayer");
+
+        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Multiplayer");
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.Text("Your Name");
+        ImGui.SetNextItemWidth(200f);
+        if (ImGui.InputText("##pname", ref _playerName, 24))
+            WorldPersistence.SavePlayerName(_playerName);
+        ImGui.Spacing();
+
+        // ── Host ──────────────────────────────────────────────────────────────
+        ImGui.SeparatorText("Host a World");
+
+        if (_hostWorldList.Count == 0)
+        {
+            ImGui.TextDisabled("No saved worlds — create one below.");
+        }
+        else
+        {
+            ImGui.SetNextItemWidth(320f);
+            if (ImGui.BeginListBox("##hostworldlist", new System.Numerics.Vector2(320f, 80f)))
+            {
+                for (int i = 0; i < _hostWorldList.Count; i++)
+                {
+                    bool sel = _selectedHostWorldIndex == i;
+                    if (ImGui.Selectable(_hostWorldList[i].DisplayName, sel))
+                        _selectedHostWorldIndex = i;
+                    if (sel) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndListBox();
+            }
+
+            bool canHost = _selectedHostWorldIndex >= 0 && _selectedHostWorldIndex < _hostWorldList.Count;
+            if (!canHost) ImGui.BeginDisabled();
+            if (ImGui.Button("Host Selected", new System.Numerics.Vector2(160f, 32f)) && canHost)
+                StartHostExistingWorld(_hostWorldList[_selectedHostWorldIndex]);
+            if (!canHost) ImGui.EndDisabled();
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("— or create & host a new world —");
+        ImGui.SetNextItemWidth(200f);
+        ImGui.InputText("##host_wname", ref _newWorldName, 64);
+        ImGui.SameLine(); ImGui.TextDisabled("world name");
+        if (ImGui.Button("Host New", new System.Numerics.Vector2(160f, 32f)))
+        {
+            if (!int.TryParse(_newWorldSeedStr.Trim(), out int seed)) seed = 0;
+            StartHostGame(_newWorldName, seed, flat: false);
+        }
+
+        ImGui.Spacing();
+        ImGui.SeparatorText("Join a Server");
+
+        // ── LAN list ──────────────────────────────────────────────────────────
+        var found = _lanDiscovery.Servers;
+        if (found.Count == 0)
+        {
+            ImGui.TextDisabled("Searching for LAN servers…");
+        }
+        else
+        {
+            if (ImGui.BeginListBox("##lanservers", new System.Numerics.Vector2(300f, 80f)))
+            {
+                foreach (var s in found)
+                {
+                    if (ImGui.Selectable($"{s.Name}  ({s.PlayerCount} online)  [{s.IpAddress}]"))
+                        _joinIp = s.IpAddress;
+                }
+                ImGui.EndListBox();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Text("IP Address");
+        ImGui.SetNextItemWidth(200f);
+        ImGui.InputText("##joinip", ref _joinIp, 64);
+
+        ImGui.Spacing();
+        if (ImGui.Button("Connect", new System.Numerics.Vector2(160f, 32f)))
+            JoinGame(_joinIp, GameServer.DefaultPort);
+
+        if (!string.IsNullOrEmpty(_multiStatus))
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.5f, 0.3f, 1f), _multiStatus);
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        if (ImGui.Button("Back", new System.Numerics.Vector2(80f, 32f)))
+            _menuPage = MenuPage.Main;
+
+        ImGui.End();
+    }
+
+    // -------------------------------------------------------------------------
+    // Multiplayer session management
+    // -------------------------------------------------------------------------
+
+    /// <summary>Hosts a listen-server for an existing saved world and connects locally.</summary>
+    private void StartHostExistingWorld(WorldPersistence.WorldInfo info)
+    {
+        var (_, seed, flat) = WorldPersistence.LoadMeta(info.SavePath);
+        WorldGenConfig.FlatWorld = flat;
+        NoiseGenerator.SetSeed(seed);
+
+        _gameServer = new GameServer(info.SavePath, seed, flat, $"{_playerName}'s World");
+        _gameServer.Start();
+
+        _savePath = info.SavePath;
+        ConnectClient("127.0.0.1", GameServer.DefaultPort);
+    }
+
+    /// <summary>Hosts a listen-server for a new world and connects locally.</summary>
+    private void StartHostGame(string worldName, int seed, bool flat)
+    {
+        if (string.IsNullOrWhiteSpace(worldName)) worldName = "Hosted World";
+
+        WorldGenConfig.FlatWorld = flat;
+        NoiseGenerator.SetSeed(seed);
+        var savePath = WorldPersistence.GetSavePath(worldName);
+        WorldPersistence.SaveMeta(savePath, worldName, seed, flat);
+
+        _gameServer = new GameServer(savePath, seed, flat, $"{_playerName}'s World");
+        _gameServer.Start();
+
+        _savePath = savePath;
+        ConnectClient("127.0.0.1", GameServer.DefaultPort);
+    }
+
+    /// <summary>Connects as a pure client (no local server).</summary>
+    private void JoinGame(string ip, int port)
+    {
+        if (string.IsNullOrWhiteSpace(ip)) return;
+        ConnectClient(ip, port);
+    }
+
+    private void ConnectClient(string ip, int port)
+    {
+        _multiStatus = "Connecting…";
+        _remotePlayers.Clear();
+
+        _gameClient = new GameClient();
+        _chatWindow.OnSend += msg => _gameClient?.SendChat(msg);
+
+        // Wire server → client events.
+        _gameClient.OnWorldInfo += info =>
+        {
+            // Reuse the existing RebuildWorld flow but skip StartNewWorld name collision.
+            // For join: we only set generation settings and rebuild from received chunks.
+            WorldGenConfig.FlatWorld = info.IsFlat;
+            NoiseGenerator.SetSeed(info.Seed);
+            _camera.Position = info.SpawnPos;
+            // Rebuild world without loading from disk (server sends chunks).
+            RebuildWorldForMultiplayer();
+            _multiStatus = "";
+        };
+
+        _gameClient.OnChunkData += pkt =>
+        {
+            var chunk = Chunk.CreateForDeserialization(new Vector3i(pkt.ChunkCoord.X, 0, pkt.ChunkCoord.Y));
+            PacketSerializer.DecodeChunkBlocks(pkt.BlockData, chunk);
+            LightEngine.ComputeChunk(chunk, _world);
+            _world.ReplaceChunk(pkt.ChunkCoord, chunk);
+            _worldRenderer.RebuildChunk(pkt.ChunkCoord);
+        };
+
+        _gameClient.OnBlockUpdate += pkt =>
+        {
+            var block = new Block { Id = pkt.BlockId, IsTransparent = BlockRegistry.IsTransparent(pkt.BlockId) };
+            _world.SetBlock(pkt.BlockPos.X, pkt.BlockPos.Y, pkt.BlockPos.Z, block);
+            LightEngine.UpdateAtBlock(pkt.BlockPos, _world);
+            _worldRenderer.RebuildAffectedChunks(pkt.BlockPos);
+        };
+
+        _gameClient.OnPlayerJoin += pkt =>
+        {
+            _remotePlayers[pkt.PlayerId] = new RemotePlayer(pkt.PlayerId, pkt.Name);
+            _chatWindow.AddMessage("", $"★ {pkt.Name} joined");
+        };
+
+        _gameClient.OnPlayerLeave += pkt =>
+        {
+            if (_remotePlayers.TryGetValue(pkt.PlayerId, out var rp))
+            {
+                _chatWindow.AddMessage("", $"★ {rp.Name} left");
+                _remotePlayers.Remove(pkt.PlayerId);
+            }
+        };
+
+        _gameClient.OnPlayerState += pkt =>
+        {
+            if (_remotePlayers.TryGetValue(pkt.PlayerId, out var rp))
+                rp.ApplyState(pkt.Position, pkt.Yaw, pkt.Pitch);
+        };
+
+        _gameClient.OnChatMessage += pkt =>
+            _chatWindow.AddMessage(pkt.Name, pkt.Message);
+
+        _gameClient.OnDisconnected += reason =>
+        {
+            _multiStatus = $"Disconnected: {reason}";
+            _remotePlayers.Clear();
+        };
+
+        _gameClient.Connect(ip, port, _playerName);
+    }
+
+    /// <summary>
+    /// Minimal world rebuild used when joining a multiplayer session.
+    /// The server will stream chunk data via <see cref="GameClient.OnChunkData"/>;
+    /// we just need an empty World and renderer ready to receive it.
+    /// </summary>
+    private void RebuildWorldForMultiplayer()
+    {
+        _worldRenderer?.Dispose();
+        _world = new World();
+
+        _player = new Player();
+
+        _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,
+                                           _entityRenderer, _player.Inventory);
+
+        _entityItems.Clear();
+        _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
+        _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
+                                                _worldRenderer, _entityItems, _savePath);
+        _interaction.NetworkClient = _gameClient;
+        _lastSaveStatus = null;
+        TransitionToPlaying();
     }
 
     /// <summary>
