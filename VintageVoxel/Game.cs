@@ -45,8 +45,9 @@ public class Game : GameWindow
     private List<WorldPersistence.WorldInfo> _worldList = new();
     private int _selectedWorldIndex = -1;
 
-    private readonly Inventory _inventory = new(Inventory.HotbarSize);
-    private HUDRenderer _hud = null!;
+    private Player _player = new();
+    private readonly InventoryWindow _inventoryWindow = new();
+    private readonly List<(ItemStack Stack, float DispX, float DispY, float Size)> _hotbarRenderTargets = new();
     private readonly List<EntityItem> _entityItems = new();
     private EntityItemRenderer _entityRenderer = null!;
 
@@ -109,16 +110,25 @@ public class Game : GameWindow
         _debugState = new DebugState();
 
         ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
-        var torch = ItemRegistry.All.Values.FirstOrDefault(i =>
-            i.Name.Equals("torch", StringComparison.OrdinalIgnoreCase));
-        if (torch != null)
-            _inventory.AddItem(torch, 1);
 
-        _hud = new HUDRenderer(_gpuResources, FramebufferSize.X, FramebufferSize.Y);
+        // Restore a saved player or give a fresh one a starter item.
+        if (WorldPersistence.TryLoadPlayer(_savePath, out var loadedPlayer, out var loadedPos))
+        {
+            _player = loadedPlayer;
+            _camera.Position = loadedPos;
+        }
+        else
+        {
+            var torch = ItemRegistry.All.Values.FirstOrDefault(i =>
+                i.Name.Equals("torch", StringComparison.OrdinalIgnoreCase));
+            if (torch != null)
+                _player.Inventory.AddItem(torch, 1);
+        }
+
         _entityRenderer = new EntityItemRenderer(_gpuResources);
 
         _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,
-                                           _entityRenderer, _inventory);
+                                           _entityRenderer, _player.Inventory);
 
         // Upload initial chunks (lighting already computed above).
         foreach (var key in initial)
@@ -129,7 +139,7 @@ public class Game : GameWindow
             if (_world.Chunks.TryGetValue(key, out var ic)) _worldRenderer.ScanChunkForPlacedModels(ic);
 
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
-        _interaction = new InteractionHandler(_world, _camera, _inventory,
+        _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
     }
 
@@ -157,7 +167,7 @@ public class Game : GameWindow
             if (_entityItems[i].PickupCooldown <= 0f &&
                 (_camera.FeetPosition - _entityItems[i].Position).Length < EntityItem.PickupRadius)
             {
-                _inventory.AddItem(_entityItems[i].Item, _entityItems[i].Count);
+                _player.Inventory.AddItem(_entityItems[i].Item, _entityItems[i].Count);
                 _entityItems.RemoveAt(i);
             }
         }
@@ -201,12 +211,11 @@ public class Game : GameWindow
 
         Profiler.Begin("HUD");
         if (_gameState == GameState.Playing)
-        {
-            _hud.Render(_inventory, _atlas, FramebufferSize.X, FramebufferSize.Y);
-            _worldRenderer.RenderHotbarItems3D(FramebufferSize.X, FramebufferSize.Y);
-            DrawHotbarCounts();
-        }
+            DrawHUDImGui(_player);
         Profiler.End("HUD");
+
+        if (_gameState == GameState.Playing)
+            _inventoryWindow.Draw(_player.Inventory);
 
         if (_debugVisible && _gameState == GameState.Playing)
         {
@@ -216,8 +225,8 @@ public class Game : GameWindow
                 playerPos: _camera.Position,
                 chunksLoaded: _worldRenderer.ChunkCount,
                 creativeMode: _camera.CreativeMode,
-                heldItem: _inventory.HeldStack,
-                hotbarSlot: _inventory.SelectedSlot,
+                heldItem: _player.Inventory.HeldStack,
+                hotbarSlot: _player.Inventory.SelectedSlot,
                 debugState: _debugState,
                 saveStatus: _lastSaveStatus);
         }
@@ -231,6 +240,22 @@ public class Game : GameWindow
         _imgui.Render();
         Profiler.End("ImGui");
 
+        // 3-D item previews rendered AFTER ImGui so the window/slot backgrounds
+        // don't paint over them.  Slot borders remain visible because scissor
+        // insets by 4 px inside each slot rect.
+        if (_gameState == GameState.Playing)
+        {
+            var ds = ImGui.GetIO().DisplaySize;
+            if (_hotbarRenderTargets.Count > 0)
+                _worldRenderer.RenderInventoryItems3D(
+                    _hotbarRenderTargets, ds.X, ds.Y,
+                    FramebufferSize.X, FramebufferSize.Y);
+            if (_inventoryWindow.IsOpen && _inventoryWindow.SlotRenderTargets.Count > 0)
+                _worldRenderer.RenderInventoryItems3D(
+                    _inventoryWindow.SlotRenderTargets, ds.X, ds.Y,
+                    FramebufferSize.X, FramebufferSize.Y);
+        }
+
         Profiler.Begin("SwapBuffers");
         SwapBuffers();
         Profiler.End("SwapBuffers");
@@ -242,6 +267,7 @@ public class Game : GameWindow
 
         if (_camera is null || _world is null) return;
         if (_gameState != GameState.Playing) return;
+        if (_inventoryWindow.IsOpen) return;
 
         _interaction.HandleMouseDown(e);
     }
@@ -252,6 +278,13 @@ public class Game : GameWindow
 
         if (e.Key == Keys.Escape)
         {
+            // Close inventory first; only fall through to pause if already closed.
+            if (_inventoryWindow.IsOpen && _gameState == GameState.Playing)
+            {
+                CloseInventory();
+                return;
+            }
+
             switch (_gameState)
             {
                 case GameState.Playing:
@@ -261,6 +294,15 @@ public class Game : GameWindow
                     TransitionToPlaying();
                     break;
             }
+            return;
+        }
+
+        if (e.Key == Keys.E && _gameState == GameState.Playing)
+        {
+            if (_inventoryWindow.IsOpen)
+                CloseInventory();
+            else
+                OpenInventory();
             return;
         }
 
@@ -296,7 +338,7 @@ public class Game : GameWindow
         {
             // e.OffsetY > 0 → scroll up → go to the previous slot (cycle backwards).
             int delta = e.OffsetY > 0 ? -1 : 1;
-            _inventory.ScrollHotbar(delta);
+            _player.Inventory.ScrollHotbar(delta);
         }
     }
 
@@ -313,21 +355,19 @@ public class Game : GameWindow
         GL.Viewport(0, 0, e.Width, e.Height);
         _camera?.SetAspectRatio(e.Width / (float)e.Height);
         _imgui?.WindowResized(e.Width, e.Height);
-        // HUD uses physical framebuffer pixels for its ortho projection.
-        _hud?.SetScreenSize(FramebufferSize.X, FramebufferSize.Y);
     }
 
     protected override void OnUnload()
     {
         base.OnUnload();
 
+        WorldPersistence.SavePlayer(_savePath, _player, _camera.Position);
         WorldPersistence.SaveAll(_savePath, _world);
 
         GL.BindVertexArray(0);
         _worldRenderer.Dispose();
         _atlas.Dispose();
         _shader.Dispose();
-        _hud.Dispose();
         _entityRenderer.Dispose();
         _gpuResources.Dispose();
         _imgui.Dispose();
@@ -391,8 +431,19 @@ public class Game : GameWindow
         }
         LightEngine.PropagateSunlight(_world);
 
+        // Restore saved player (position + inventory + stats) or start fresh.
+        if (WorldPersistence.TryLoadPlayer(_savePath, out var loadedPlayer, out var loadedPos))
+        {
+            _player = loadedPlayer;
+            _camera.Position = loadedPos;
+        }
+        else
+        {
+            _player = new Player();
+        }
+
         _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,
-                                           _entityRenderer, _inventory);
+                                           _entityRenderer, _player.Inventory);
         foreach (var key in initial)
         {
             _worldRenderer.RebuildChunk(key);
@@ -402,46 +453,170 @@ public class Game : GameWindow
 
         _entityItems.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
-        _interaction = new InteractionHandler(_world, _camera, _inventory,
+        _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
         _lastSaveStatus = null;
         TransitionToPlaying();
     }
 
+    private void OpenInventory()
+    {
+        _inventoryWindow.IsOpen = true;
+        CursorState = CursorState.Normal;
+        _firstMove = true;
+    }
+
+    private void CloseInventory()
+    {
+        _inventoryWindow.IsOpen = false;
+        _inventoryWindow.OnClose(_player.Inventory);
+        CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
+    }
+
     private void TransitionToPaused()
     {
+        // Ensure inventory is dismissed before the pause menu takes over.
+        if (_inventoryWindow.IsOpen)
+        {
+            _inventoryWindow.IsOpen = false;
+            _inventoryWindow.OnClose(_player.Inventory);
+        }
         _gameState = GameState.Paused;
         CursorState = CursorState.Normal;
         _firstMove = true;
     }
 
-    private void DrawHotbarCounts()
+    /// <summary>
+    /// Draws the crosshair, hotbar slots, and item count labels using the ImGui
+    /// foreground draw list (no separate OpenGL shader needed).
+    /// Also fills <see cref="_hotbarRenderTargets"/> so 3-D item previews can be
+    /// rendered after <see cref="ImGuiController.Render"/>.
+    /// </summary>
+    private void DrawHUDImGui(Player player)
     {
-        var drawList = ImGui.GetForegroundDrawList();
-        var displaySize = ImGui.GetIO().DisplaySize;
+        var inventory = player.Inventory;
+        var dl = ImGui.GetForegroundDrawList();
+        var ds = ImGui.GetIO().DisplaySize;
 
-        float slotSize = GameConstants.Render.HotbarSlotSize;
-        float slotGap = GameConstants.Render.HotbarSlotGap;
-        int slots = Inventory.HotbarSize;
-        float totalW = slots * slotSize + (slots - 1) * slotGap;
-        float x0 = (displaySize.X - totalW) * 0.5f;
-        float y0 = displaySize.Y - GameConstants.Render.HotbarBottomPad - slotSize;
-        const float pad = 4f;
+        // ── Crosshair ─────────────────────────────────────────────────────────
+        float cx = ds.X * 0.5f;
+        float cy = ds.Y * 0.5f;
+        // Shadow
+        dl.AddRectFilled(new System.Numerics.Vector2(cx - 11f, cy - 2f),
+                         new System.Numerics.Vector2(cx + 11f, cy + 2f), 0x66000000);
+        dl.AddRectFilled(new System.Numerics.Vector2(cx - 2f, cy - 11f),
+                         new System.Numerics.Vector2(cx + 2f, cy + 11f), 0x66000000);
+        // White bars
+        dl.AddRectFilled(new System.Numerics.Vector2(cx - 10f, cy - 1f),
+                         new System.Numerics.Vector2(cx + 10f, cy + 1f), 0xE6FFFFFF);
+        dl.AddRectFilled(new System.Numerics.Vector2(cx - 1f, cy - 10f),
+                         new System.Numerics.Vector2(cx + 1f, cy + 10f), 0xE6FFFFFF);
 
-        for (int i = 0; i < slots; i++)
+        // ── Hotbar ────────────────────────────────────────────────────────────
+        int count = Inventory.HotbarSize;
+        float slotSz = GameConstants.Render.HotbarSlotSize;
+        float slotGp = GameConstants.Render.HotbarSlotGap;
+        float totalW = count * slotSz + (count - 1) * slotGp;
+        float x0 = (ds.X - totalW) * 0.5f;
+        float y0 = ds.Y - GameConstants.Render.HotbarBottomPad - slotSz;
+        const float BorderR = 3f;
+
+        _hotbarRenderTargets.Clear();
+
+        // ── HP & Stamina bars ─────────────────────────────────────────────────
+        const float BarH = 8f;
+        const float BarGap = 6f;  // gap between the two bars
+        float barY = y0 - BarH - 8f;
+        float halfW = (totalW - BarGap) * 0.5f;
+
+        // HP — left half, red
+        float hpFrac = MathF.Max(0f, MathF.Min(1f, player.Hp / player.MaxHp));
+        // background
+        dl.AddRectFilled(
+            new System.Numerics.Vector2(x0, barY),
+            new System.Numerics.Vector2(x0 + halfW, barY + BarH),
+            0x99000000, 2f);
+        // fill
+        if (hpFrac > 0f)
+            dl.AddRectFilled(
+                new System.Numerics.Vector2(x0, barY),
+                new System.Numerics.Vector2(x0 + halfW * hpFrac, barY + BarH),
+                0xCC2255EE, 2f);  // AABBGGRR → red
+        // border
+        dl.AddRect(
+            new System.Numerics.Vector2(x0, barY),
+            new System.Numerics.Vector2(x0 + halfW, barY + BarH),
+            0xCCFFFFFF, 2f);
+        // label
+        string hpLabel = $"♥ {(int)player.Hp}/{(int)player.MaxHp}";
+        var hpTs = ImGui.CalcTextSize(hpLabel);
+        float hpTx = x0 + (halfW - hpTs.X) * 0.5f;
+        float hpTy = barY + (BarH - hpTs.Y) * 0.5f;
+        dl.AddText(new System.Numerics.Vector2(hpTx + 1, hpTy + 1), 0xAA000000, hpLabel);
+        dl.AddText(new System.Numerics.Vector2(hpTx, hpTy), 0xFFFFFFFF, hpLabel);
+
+        // Stamina — right half, green-yellow
+        float stFrac = MathF.Max(0f, MathF.Min(1f, player.Stamina / player.MaxStamina));
+        float stX0 = x0 + halfW + BarGap;
+        // background
+        dl.AddRectFilled(
+            new System.Numerics.Vector2(stX0, barY),
+            new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
+            0x99000000, 2f);
+        // fill
+        if (stFrac > 0f)
+            dl.AddRectFilled(
+                new System.Numerics.Vector2(stX0, barY),
+                new System.Numerics.Vector2(stX0 + halfW * stFrac, barY + BarH),
+                0xCC00CC44, 2f);  // AABBGGRR → green
+        // border
+        dl.AddRect(
+            new System.Numerics.Vector2(stX0, barY),
+            new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
+            0xCCFFFFFF, 2f);
+        // label
+        string stLabel = $"⚡ {(int)player.Stamina}/{(int)player.MaxStamina}";
+        var stTs = ImGui.CalcTextSize(stLabel);
+        float stTx = stX0 + (halfW - stTs.X) * 0.5f;
+        float stTy = barY + (BarH - stTs.Y) * 0.5f;
+        dl.AddText(new System.Numerics.Vector2(stTx + 1, stTy + 1), 0xAA000000, stLabel);
+        dl.AddText(new System.Numerics.Vector2(stTx, stTy), 0xFFFFFFFF, stLabel);
+
+        for (int i = 0; i < count; i++)
         {
-            var stack = _inventory.Slots[i];
-            if (stack.IsEmpty || stack.Count <= 1) continue;
+            float sx = x0 + i * (slotSz + slotGp);
+            bool sel = i == inventory.SelectedSlot;
 
-            string label = stack.Count.ToString();
-            var textSize = ImGui.CalcTextSize(label);
-            float tx = x0 + i * (slotSize + slotGap) + slotSize - pad - textSize.X;
-            float ty = y0 + slotSize - pad - textSize.Y;
+            // Border
+            uint borderCol = sel ? 0xFFFFFFFF : 0xE68C8C8C;
+            dl.AddRectFilled(
+                new System.Numerics.Vector2(sx - 2f, y0 - 2f),
+                new System.Numerics.Vector2(sx + slotSz + 2f, y0 + slotSz + 2f),
+                borderCol, BorderR + 1f);
 
-            // Drop shadow for readability against any background.
-            drawList.AddText(new System.Numerics.Vector2(tx + 1, ty + 1), 0xFF000000, label);
-            // Bright white count.
-            drawList.AddText(new System.Numerics.Vector2(tx, ty), 0xFFFFFFFF, label);
+            // Background — semi-transparent so 3-D items show through
+            uint bgCol = sel ? 0x73595959u : 0x521F1F1Fu;
+            dl.AddRectFilled(
+                new System.Numerics.Vector2(sx, y0),
+                new System.Numerics.Vector2(sx + slotSz, y0 + slotSz),
+                bgCol, BorderR);
+
+            var stack = inventory.Slots[i];
+            if (stack.IsEmpty) continue;
+
+            // Queue for 3-D render
+            _hotbarRenderTargets.Add((stack, sx, y0, slotSz));
+
+            // Count label (bottom-right)
+            if (stack.Count > 1)
+            {
+                string lbl = stack.Count.ToString();
+                var ts = ImGui.CalcTextSize(lbl);
+                float tx = sx + slotSz - ts.X - 3f;
+                float ty = y0 + slotSz - ts.Y - 2f;
+                dl.AddText(new System.Numerics.Vector2(tx + 1, ty + 1), 0xAA000000, lbl);
+                dl.AddText(new System.Numerics.Vector2(tx, ty), 0xFFEBEB00, lbl);
+            }
         }
     }
 

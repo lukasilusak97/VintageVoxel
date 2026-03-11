@@ -37,6 +37,7 @@ public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
     private const byte Version = 1;
+    private const int SubVolume = ChiseledBlockData.SubSize * ChiseledBlockData.SubSize * ChiseledBlockData.SubSize; // 4096
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
     public static string SavesRootPath { get; } = Path.Combine(
@@ -243,21 +244,88 @@ public static class WorldPersistence
     // RLE helpers — blocks
     // -------------------------------------------------------------------------
 
-    private static void WriteBlockRle(BinaryWriter bw, Chunk chunk) =>
-        RleCodec.WriteUshort(bw, i => chunk.GetRawBlockId(i), Chunk.Volume);
+    private static void WriteBlockRle(BinaryWriter bw, Chunk chunk)
+    {
+        // Scan the flat block array and accumulate (id, runLength) pairs.
+        // WHY collect first? We need the entry count before the entries themselves.
+        var runs = new List<(ushort id, ushort count)>(64);
+        int i = 0;
+        while (i < Chunk.Volume)
+        {
+            ushort id = chunk.GetRawBlockId(i);
+            int run = 1;
+            // Merge as many identical neighbours as fit in a ushort run length.
+            while (i + run < Chunk.Volume &&
+                   chunk.GetRawBlockId(i + run) == id &&
+                   run < ushort.MaxValue)
+                run++;
+            runs.Add((id, (ushort)run));
+            i += run;
+        }
 
-    private static ushort[] ReadBlockRle(BinaryReader br) =>
-        RleCodec.ReadUshort(br, Chunk.Volume);
+        bw.Write(runs.Count);
+        foreach (var (id, count) in runs)
+        {
+            bw.Write(id);    // ushort
+            bw.Write(count); // ushort
+        }
+    }
+
+    private static ushort[] ReadBlockRle(BinaryReader br)
+    {
+        int entryCount = br.ReadInt32();
+        var ids = new ushort[Chunk.Volume];
+        int pos = 0;
+        for (int e = 0; e < entryCount; e++)
+        {
+            ushort id = br.ReadUInt16();
+            ushort count = br.ReadUInt16();
+            for (int j = 0; j < count && pos < Chunk.Volume; j++)
+                ids[pos++] = id;
+        }
+        return ids;
+    }
 
     // -------------------------------------------------------------------------
     // RLE helpers — sub-voxels
     // -------------------------------------------------------------------------
 
-    private static void WriteSubVoxelRle(BinaryWriter bw, ChiseledBlockData chisel) =>
-        RleCodec.WriteBool(bw, i => chisel.GetRaw(i), ChiseledBlockData.SubVolume);
+    private static void WriteSubVoxelRle(BinaryWriter bw, ChiseledBlockData chisel)
+    {
+        var runs = new List<(bool filled, ushort count)>(32);
+        int i = 0;
+        while (i < SubVolume)
+        {
+            bool val = chisel.GetRaw(i);
+            int run = 1;
+            while (i + run < SubVolume && chisel.GetRaw(i + run) == val && run < ushort.MaxValue)
+                run++;
+            runs.Add((val, (ushort)run));
+            i += run;
+        }
 
-    private static void ReadSubVoxelRle(BinaryReader br, ChiseledBlockData chisel) =>
-        RleCodec.ReadBool(br, (i, v) => chisel.SetRaw(i, v), ChiseledBlockData.SubVolume);
+        bw.Write(runs.Count);
+        foreach (var (filled, count) in runs)
+        {
+            bw.Write((byte)(filled ? 1 : 0)); // bool as byte
+            bw.Write(count);                  // ushort
+        }
+    }
+
+    private static void ReadSubVoxelRle(BinaryReader br, ChiseledBlockData chisel)
+    {
+        // The chisel was created with all sub-voxels = true (constructor default).
+        // The RLE covers all SubVolume positions, so every cell will be overwritten.
+        int entryCount = br.ReadInt32();
+        int pos = 0;
+        for (int e = 0; e < entryCount; e++)
+        {
+            bool val = br.ReadByte() != 0;
+            ushort count = br.ReadUInt16();
+            for (int j = 0; j < count && pos < SubVolume; j++)
+                chisel.SetRaw(pos++, val);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Utility
@@ -265,4 +333,121 @@ public static class WorldPersistence
 
     private static string GetChunkPath(string folder, Vector2i key) =>
         Path.Combine(folder, $"c_{key.X}_{key.Y}.bin");
+
+    // -------------------------------------------------------------------------
+    // Player data
+    // -------------------------------------------------------------------------
+
+    private static readonly byte[] PlayerMagic = Encoding.ASCII.GetBytes("VVPL");
+    private const byte PlayerVersion = 1;
+
+    /// <summary>
+    /// Serialises all player state (HP, stamina, spawn point, position, inventory)
+    /// to <c>player.bin</c> inside <paramref name="folder"/>.
+    /// </summary>
+    public static void SavePlayer(string folder, Player player, Vector3 cameraPosition)
+    {
+        Directory.CreateDirectory(folder);
+        string path = Path.Combine(folder, "player.bin");
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var bw = new BinaryWriter(fs, Encoding.UTF8, leaveOpen: false);
+
+        bw.Write(PlayerMagic);   // "VVPL"
+        bw.Write(PlayerVersion); // 1
+
+        bw.Write(player.Hp);
+        bw.Write(player.Stamina);
+
+        bw.Write(player.SpawnPoint.X);
+        bw.Write(player.SpawnPoint.Y);
+        bw.Write(player.SpawnPoint.Z);
+
+        bw.Write(cameraPosition.X);
+        bw.Write(cameraPosition.Y);
+        bw.Write(cameraPosition.Z);
+
+        var slots = player.Inventory.Slots;
+        bw.Write(player.Inventory.SelectedSlot);
+        bw.Write(slots.Count);
+        foreach (var slot in slots)
+        {
+            if (slot.IsEmpty || slot.Item == null)
+            {
+                bw.Write((byte)0);
+            }
+            else
+            {
+                bw.Write((byte)1);
+                bw.Write(slot.Item.Id);
+                bw.Write(slot.Count);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attempts to read player state from <c>player.bin</c> in
+    /// <paramref name="folder"/>.  Returns <c>false</c> when the file is absent
+    /// or corrupt — the caller should create a default <see cref="Player"/> in
+    /// that case.
+    /// </summary>
+    public static bool TryLoadPlayer(
+        string folder,
+        out Player player,
+        out Vector3 position)
+    {
+        player = new Player();
+        position = new Vector3(16f, 35f, 16f);
+
+        string path = Path.Combine(folder, "player.bin");
+        if (!File.Exists(path)) return false;
+
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: false);
+
+            byte[] magic = br.ReadBytes(4);
+            if (!magic.AsSpan().SequenceEqual(PlayerMagic.AsSpan())) return false;
+
+            byte version = br.ReadByte();
+            if (version != PlayerVersion) return false;
+
+            player.Hp = br.ReadSingle();
+            player.Stamina = br.ReadSingle();
+
+            float spawnX = br.ReadSingle();
+            float spawnY = br.ReadSingle();
+            float spawnZ = br.ReadSingle();
+            player.SpawnPoint = new Vector3(spawnX, spawnY, spawnZ);
+
+            float posX = br.ReadSingle();
+            float posY = br.ReadSingle();
+            float posZ = br.ReadSingle();
+            position = new Vector3(posX, posY, posZ);
+
+            int selectedSlot = br.ReadInt32();
+            player.Inventory.SelectSlot(selectedSlot);
+
+            int slotCount = br.ReadInt32();
+            int maxSlots = player.Inventory.Slots.Count;
+            for (int i = 0; i < slotCount; i++)
+            {
+                byte hasItem = br.ReadByte();
+                if (hasItem == 0) continue;
+                int itemId = br.ReadInt32();
+                int count = br.ReadInt32();
+                if (i < maxSlots && ItemRegistry.All.TryGetValue(itemId, out var item))
+                    player.Inventory.GetSlotRef(i) = new ItemStack(item, count);
+            }
+
+            return true;
+        }
+        catch
+        {
+            // Corrupt or truncated file — start fresh rather than crashing.
+            player = new Player();
+            position = new Vector3(16f, 35f, 16f);
+            return false;
+        }
+    }
 }

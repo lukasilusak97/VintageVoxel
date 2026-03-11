@@ -360,6 +360,78 @@ public sealed class WorldRenderer : IDisposable
         _atlas.Use(TextureUnit.Texture0);
     }
 
+    /// <summary>
+    /// Renders inventory slot items as 3-D mini previews using the same
+    /// viewport-per-slot technique as <see cref="RenderHotbarItems3D"/>.
+    /// <paramref name="targets"/> is the <see cref="InventoryWindow.SlotRenderTargets"/>
+    /// list populated during that window's Draw call.  Coordinates are in ImGui
+    /// display space (Y=0 at top); this method converts them to GL framebuffer space.
+    /// Must be called AFTER <see cref="InventoryWindow.Draw"/> and BEFORE
+    /// ImGuiController.Render so the items appear below the (transparent) ImGui overlay.
+    /// </summary>
+    public void RenderInventoryItems3D(
+        IReadOnlyList<(ItemStack Stack, float DispX, float DispY, float DispSize)> targets,
+        float displayW, float displayH,
+        int fbWidth, int fbHeight)
+    {
+        if (targets.Count == 0) return;
+
+        float sx = fbWidth / displayW;
+        float sy = fbHeight / displayH;
+        const int pad = 4;
+
+        var miniProj = Matrix4.CreatePerspectiveFieldOfView(
+            MathHelper.DegreesToRadians(40f), 1f, 0.01f, 20f);
+        var eye = new Vector3(0.6f, 0.5f, 1.0f);
+        var target = new Vector3(0f, 0.15f, 0f);
+        var miniView = Matrix4.LookAt(eye, target, Vector3.UnitY);
+
+        _shader.Use();
+        _atlas.Use(TextureUnit.Texture0);
+        _shader.SetInt("uTexture", 0);
+        _shader.SetInt("uNoTexture", 0);
+        _shader.SetMatrix4("projection", ref miniProj);
+        _shader.SetMatrix4("view", ref miniView);
+
+        GL.Disable(EnableCap.DepthTest);
+        GL.Disable(EnableCap.CullFace);
+        GL.Enable(EnableCap.ScissorTest);
+
+        Func<Item, (int Vao, int IndexCount, int TexHandle)?> gpuGetter = item =>
+        {
+            if (item.Mesh == null) return null;
+            var mg = GetOrCreateModelGpu(item);
+            return (mg.Mesh.Vao, mg.Mesh.IndexCount, mg.TexHandle);
+        };
+
+        foreach (var (stack, dispX, dispY, dispSize) in targets)
+        {
+            if (stack.IsEmpty || stack.Item == null) continue;
+
+            // Convert display coords (Y=0 top) → GL framebuffer coords (Y=0 bottom).
+            int innerSize = (int)(dispSize * Math.Min(sx, sy)) - pad * 2;
+            if (innerSize <= 0) continue;
+
+            int vx = (int)(dispX * sx) + pad;
+            int vy = (int)(fbHeight - (dispY + dispSize) * sy) + pad;
+
+            GL.Scissor(vx, vy, innerSize, innerSize);
+            GL.Viewport(vx, vy, innerSize, innerSize);
+
+            _hudSlot[0] = new EntityItem(stack.Item, stack.Count, Vector3.Zero)
+            {
+                SpinAngle = MathF.PI / 4f
+            };
+            _entityRenderer.Render(_hudSlot, _shader, _atlas.Handle, gpuGetter);
+        }
+
+        GL.Disable(EnableCap.ScissorTest);
+        GL.Enable(EnableCap.DepthTest);
+        GL.Enable(EnableCap.CullFace);
+        GL.Viewport(0, 0, fbWidth, fbHeight);
+        _atlas.Use(TextureUnit.Texture0);
+    }
+
     // -------------------------------------------------------------------------
     // Cleanup
     // -------------------------------------------------------------------------

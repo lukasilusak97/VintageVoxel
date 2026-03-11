@@ -4,14 +4,25 @@ namespace VintageVoxel;
 /// Holds a fixed-size array of <see cref="ItemStack"/> slots and tracks the
 /// currently selected hotbar slot.
 ///
-/// Slots 0–<see cref="HotbarSize"/>-1 form the hotbar; additional slots (if
-/// <paramref name="slotCount"/> is larger) are the backpack grid and are
-/// exposed through the same <see cref="Slots"/> collection.
+/// Slots 0–<see cref="HotbarSize"/>-1 form the hotbar; the remaining
+/// <see cref="BackpackSize"/> slots form the player's backpack grid.
 /// </summary>
 public class Inventory
 {
     /// <summary>Number of slots visible in the hotbar strip.</summary>
     public const int HotbarSize = 10;
+
+    /// <summary>Number of rows in the backpack grid.</summary>
+    public const int BackpackRows = 3;
+
+    /// <summary>Number of columns in the backpack grid (matches <see cref="HotbarSize"/>).</summary>
+    public const int BackpackCols = HotbarSize;
+
+    /// <summary>Total number of backpack (non-hotbar) slots.</summary>
+    public const int BackpackSize = BackpackRows * BackpackCols;
+
+    /// <summary>Total number of inventory slots (hotbar + backpack).</summary>
+    public const int TotalSlots = HotbarSize + BackpackSize;
 
     private readonly ItemStack[] _slots;
 
@@ -19,10 +30,13 @@ public class Inventory
     public int SelectedSlot { get; private set; }
 
     /// <summary>Creates an inventory with <paramref name="slotCount"/> total slots.</summary>
-    public Inventory(int slotCount = HotbarSize)
+    public Inventory(int slotCount = TotalSlots)
     {
         _slots = new ItemStack[slotCount];
     }
+
+    /// <summary>Returns a reference to the slot at <paramref name="index"/> for direct mutation.</summary>
+    public ref ItemStack GetSlotRef(int index) => ref _slots[index];
 
     /// <summary>Read-only view across all slots (hotbar + backpack).</summary>
     public IReadOnlyList<ItemStack> Slots => _slots;

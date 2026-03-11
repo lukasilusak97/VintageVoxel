@@ -12,31 +12,7 @@
   <ItemGroup>
     <PackageReference Include="OpenTK" Version="4.9.3" />
     <PackageReference Include="ImGui.NET" Version="1.89.7.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\EngineCore\EngineCore.csproj" />
-  </ItemGroup>
-
-  <!-- Exclude engine files that have been moved to EngineCore -->
-  <ItemGroup>
-    <Compile Remove="Shader.cs" />
-    <Compile Remove="Texture.cs" />
-    <Compile Remove="TextureAtlas.cs" />
-    <Compile Remove="BlockRegistry.cs" />
-    <Compile Remove="Frustum.cs" />
-    <Compile Remove="NoiseGenerator.cs" />
-    <Compile Remove="ImGuiController.cs" />
-    <Compile Remove="Camera.cs" />
-    <Compile Remove="Block.cs" />
-    <Compile Remove="ChiseledBlockData.cs" />
-    <Compile Remove="Chunk.cs" />
-    <Compile Remove="ChunkMeshBuilder.cs" />
-    <Compile Remove="World.cs" />
-    <Compile Remove="WorldPersistence.cs" />
-    <Compile Remove="LightEngine.cs" />
-    <Compile Remove="Raycaster.cs" />
-    <Compile Remove="WorldGenConfig.cs" />
+    <PackageReference Include="StbImageSharp" Version="2.30.15" />
   </ItemGroup>
 
   <!-- Copy GLSL shader files to the output directory so they're found at runtime
