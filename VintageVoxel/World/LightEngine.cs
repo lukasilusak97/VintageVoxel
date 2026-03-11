@@ -1,115 +1,117 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using OpenTK.Mathematics;
 
 namespace VintageVoxel;
 
 /// <summary>
-/// Propagates sunlight and block-light through the voxel world using a
-/// BFS (Breadth-First Search) flood-fill algorithm.
+/// Fast BFS-based voxel lighting engine with Minecraft-style photometric behavior.
 ///
-/// SUNLIGHT MODEL
-///   Columns that are open to the sky receive sunlight level 15 from the top
-///   of the chunk downward.  Once a sky-lit voxel is known, BFS spreads the
-///   light horizontally through neighbouring air blocks, decaying by 1 per step.
-///   This produces a soft penumbra inside caves and under overhangs.
+/// SUNLIGHT MODEL (sky channel)
+///   Sky columns receive sunlight level 15 from the top of the world downward.
+///   Sunlight propagates VERTICALLY without intensity decay — a column open to
+///   the sky is fully bright at every depth, just like real outdoor light.
+///   When spreading HORIZONTALLY (XZ) the level decrements by 1 per step,
+///   casting a soft penumbra under overhangs and into cave mouths.
 ///
-/// BLOCK LIGHT MODEL
-///   Any block with a non-zero emitted level is seeded into the same BFS queue.
-///   Currently this is a scaffold — no block type emits light yet, but the
-///   plumbing is in place for torches (ID 4, level 14).
+/// BLOCK LIGHT MODEL (emitter channel)
+///   Light-emitting blocks (torches etc.) seed the BFS at a fixed emission
+///   level (≤14).  Propagation decays by 1 per step in all six axes,
+///   giving a warm radius of illumination that fades into shadow.
 ///
-/// SCOPE
-///   This engine operates on <see cref="World"/> coordinates. For an initial
-///   full-world compute after chunk load, call
-///   <see cref="ComputeChunk(Chunk, World)"/>.
-///   For incremental updates after block changes call
-///   <see cref="PropagateSunlight(World)"/> (full recompute) or the targeted
-///   <see cref="UpdateBlockLight"/> path (not yet implemented).
+/// INCREMENTAL UPDATES
+///   <see cref="UpdateAtBlock"/> marks affected chunks dirty.
+///   <see cref="FlushDirty"/> re-floods all dirty chunks each frame,
+///   batching multiple block edits into a single propagation pass.
 ///
-/// TECHNICAL NOTES
-///   - Light is stored in <see cref="Chunk.SunLight"/> and
-///     <see cref="Chunk.BlockLight"/> as <c>byte</c> values [0, 15].
-///   - The BFS is bounded by the loaded chunk set; unloaded neighbours are
-///     treated as opaque (no propagation across the load boundary).
-///   - Full recompute is O(loaded voxels) which is fast enough for the chunk
-///     streaming frequency of this engine.
+/// PERFORMANCE NOTES
+///   - A lightweight <see cref="LightNode"/> struct keeps the BFS queue
+///     allocation minimal and cache-friendly.
+///   - Coordinates are kept as world-space integers throughout; chunk
+///     lookups use an arithmetic right-shift floor-divide (no MathF.Floor).
+///   - Sun and block channels share the same BFS loop but write to separate
+///     arrays, so the mesher can apply different color temperatures.
 /// </summary>
 public static class LightEngine
 {
-    private const byte MaxSunLight = 15;
-    private const byte MaxBlockLight = 14; // Torches (when added)
+    public const byte MaxSunLight = 15;
+    public const byte MaxBlockLight = 14; // Torches
 
-    // Chunk keys that need a light recompute on the next FlushDirty call.
     private static readonly HashSet<Vector3i> _pendingDirty = new();
 
-    // Axis-aligned neighbour offsets (6-connected face adjacency).
-    private static readonly (int dx, int dy, int dz)[] Neighbors6 =
+    // Six face-adjacent offsets.  Down (index 1) is special for sunlight.
+    private static readonly (int dx, int dy, int dz)[] Faces6 =
     {
-        ( 0, +1,  0),
-        ( 0, -1,  0),
-        ( 0,  0, -1),
-        ( 0,  0, +1),
-        (-1,  0,  0),
-        (+1,  0,  0),
+        ( 0, +1,  0), // 0 Up
+        ( 0, -1,  0), // 1 Down  ← sunlight propagates without decay in this direction
+        ( 0,  0, -1), // 2 North
+        ( 0,  0, +1), // 3 South
+        (-1,  0,  0), // 4 West
+        (+1,  0,  0), // 5 East
     };
+
+    // BFS node — 12 bytes, stays on the stack inside Queue<T>.
+    private readonly struct LightNode
+    {
+        public readonly int Wx, Wy, Wz;
+        public readonly byte Level;
+        public readonly bool IsSun;
+        public LightNode(int wx, int wy, int wz, byte level, bool isSun)
+        { Wx = wx; Wy = wy; Wz = wz; Level = level; IsSun = isSun; }
+    }
 
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Computes lighting for a single newly-added chunk, then lets light bleed
-    /// into (and from) its already-lit neighbours.  Call this after a chunk is
-    /// generated and added to the world.
+    /// Computes full lighting for a single newly-loaded chunk, then lets light
+    /// bleed into its already-lit loaded neighbours.
     /// </summary>
     public static void ComputeChunk(Chunk chunk, World world)
     {
-        // Clear previous light data for this chunk.
-        System.Array.Clear(chunk.SunLight, 0, Chunk.Volume);
-        System.Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
+        Array.Clear(chunk.SunLight, 0, Chunk.Volume);
+        Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
 
-        // Seed the BFS with sky-column entries for this chunk.
-        var queue = new Queue<(int wx, int wy, int wz, byte level, bool isSun)>();
+        var queue = new Queue<LightNode>(Chunk.Volume);
         SeedSunlightChunk(chunk, world, queue);
         SeedBlockLightChunk(chunk, queue);
-
-        // Run BFS to spread light through the world.
         BfsPropagate(world, queue);
     }
 
     /// <summary>
-    /// Full recompute of sunlight across all currently loaded chunks.
-    /// Clears all existing sun-light data, then floods from the sky.
-    /// Useful for initial world load or after major terrain edits.
+    /// Full recompute of both sunlight and block-light across all loaded chunks.
+    /// Useful after world load or large terrain mutations.
     /// </summary>
     public static void PropagateSunlight(World world)
     {
-        // Clear sun light across every loaded chunk.
         foreach (var chunk in world.Chunks.Values)
-            System.Array.Clear(chunk.SunLight, 0, Chunk.Volume);
+        {
+            Array.Clear(chunk.SunLight, 0, Chunk.Volume);
+            Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
+        }
 
-        var queue = new Queue<(int wx, int wy, int wz, byte level, bool isSun)>();
-
-        // Seed top-to-bottom so that when a lower chunk checks the layer above
-        // for sky-open columns, the upper chunk is already seeded.
+        var queue = new Queue<LightNode>(Chunk.Volume * world.Chunks.Count);
+        // Seed top-to-bottom: upper chunks must be seeded first so lower-chunk
+        // sky-open checks see valid block data above them.
         foreach (var chunk in world.Chunks.Values.OrderByDescending(c => c.Position.Y))
+        {
             SeedSunlightChunk(chunk, world, queue);
-
+            SeedBlockLightChunk(chunk, queue);
+        }
         BfsPropagate(world, queue);
     }
 
     /// <summary>
-    /// Schedules a lighting recompute for the chunk containing
-    /// <paramref name="blockPos"/> and its four cardinal XZ neighbours.
-    /// The actual BFS runs the next time <see cref="FlushDirty"/> is called
-    /// (once per frame from <see cref="WorldStreamer"/>), so multiple block
-    /// changes within the same frame are batched into a single propagation pass.
+    /// Marks the chunk containing <paramref name="blockPos"/> and all six
+    /// face-neighbouring chunks dirty for a lighting recompute on the next
+    /// <see cref="FlushDirty"/> call, batching multiple edits per frame.
     /// </summary>
     public static void UpdateAtBlock(Vector3i blockPos, World world)
     {
-        int cx = (int)MathF.Floor((float)blockPos.X / Chunk.Size);
-        int cy = (int)MathF.Floor((float)blockPos.Y / Chunk.Size);
-        int cz = (int)MathF.Floor((float)blockPos.Z / Chunk.Size);
+        int cx = ChunkCoord(blockPos.X);
+        int cy = ChunkCoord(blockPos.Y);
+        int cz = ChunkCoord(blockPos.Z);
 
         _pendingDirty.Add(new Vector3i(cx, cy, cz));
         _pendingDirty.Add(new Vector3i(cx - 1, cy, cz));
@@ -121,29 +123,23 @@ public static class LightEngine
     }
 
     /// <summary>
-    /// Recomputes lighting for every chunk that was marked dirty by
-    /// <see cref="UpdateAtBlock"/> since the last flush, then clears the
-    /// dirty set.  Returns the set of chunk keys whose light data changed
-    /// so the caller can schedule mesh rebuilds for them.
+    /// Re-floods all dirty chunks accumulated since the last call.
+    /// Returns the set of chunk keys whose data changed so the caller can
+    /// schedule mesh rebuilds for them.
     /// </summary>
     public static HashSet<Vector3i> FlushDirty(World world)
     {
-        if (_pendingDirty.Count == 0)
-            return new HashSet<Vector3i>();
+        if (_pendingDirty.Count == 0) return new HashSet<Vector3i>();
 
-        var queue = new Queue<(int, int, int, byte, bool)>();
-
-        // Seed top-to-bottom: upper layers must be seeded first so lower-layer
-        // seeding can correctly test whether a column is sky-open from above.
+        var queue = new Queue<LightNode>(Chunk.Volume * 2);
         foreach (var key in _pendingDirty.OrderByDescending(k => k.Y))
         {
             if (!world.Chunks.TryGetValue(key, out var chunk)) continue;
-            System.Array.Clear(chunk.SunLight, 0, Chunk.Volume);
-            System.Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
+            Array.Clear(chunk.SunLight, 0, Chunk.Volume);
+            Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
             SeedSunlightChunk(chunk, world, queue);
             SeedBlockLightChunk(chunk, queue);
         }
-
         BfsPropagate(world, queue);
 
         var relit = new HashSet<Vector3i>(_pendingDirty);
@@ -152,71 +148,58 @@ public static class LightEngine
     }
 
     // -------------------------------------------------------------------------
-    // Seeding
+    // Seeding helpers
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Seeds the BFS queue with sunlight entries for the given chunk.
-    ///
-    /// Column-fill strategy:
-    ///   Walk each (x, z) column from the top of the chunk downward.
-    ///   As long as the block is transparent, assign level 15 and continue.
-    ///   When we hit a solid block, stop — the face underneath is in shadow.
-    ///   After column-fill, any sky-lit voxel at the edge of the chunk (or any
-    ///   that is directly sky-exposed) is enqueued for BFS spread.
+    /// Seeds the BFS with sunlight entries for every sky-open (x,z) column in
+    /// <paramref name="chunk"/>.  All transparent voxels in a sky-open column are
+    /// assigned MaxSunLight == 15 — sunlight does not decay going straight down.
     /// </summary>
-    private static void SeedSunlightChunk(
-        Chunk chunk,
-        World world,
-        Queue<(int, int, int, byte, bool)> queue)
+    private static void SeedSunlightChunk(Chunk chunk, World world, Queue<LightNode> queue)
     {
         int baseWx = chunk.Position.X * Chunk.Size;
         int baseWy = chunk.Position.Y * Chunk.Size;
         int baseWz = chunk.Position.Z * Chunk.Size;
-
-        // For chunks below the world ceiling, only seed a column if no solid block
-        // exists anywhere above it in the loaded world.  We check the actual block
-        // data (not light values) so this is correct regardless of seeding order.
-        // For the topmost chunk (Position.Y == MaxChunkY-1) every column is sky-open.
-        bool isTopLayer = (chunk.Position.Y == World.MaxChunkY - 1);
+        bool isTop = chunk.Position.Y == World.MaxChunkY - 1;
 
         for (int z = 0; z < Chunk.Size; z++)
             for (int x = 0; x < Chunk.Size; x++)
             {
-                if (!isTopLayer)
-                {
-                    bool blocked = false;
-                    for (int cy = chunk.Position.Y + 1; cy < World.MaxChunkY && !blocked; cy++)
-                    {
-                        var aboveKey = new Vector3i(chunk.Position.X, cy, chunk.Position.Z);
-                        if (!world.Chunks.TryGetValue(aboveKey, out var aboveChunk)) continue;
-                        for (int ay = 0; ay < Chunk.Size && !blocked; ay++)
-                            if (!aboveChunk.GetBlock(x, ay, z).IsTransparent) blocked = true;
-                    }
-                    if (blocked) continue;
-                }
+                if (!isTop && IsColumnBlockedAbove(chunk, world, x, z)) continue;
 
                 for (int y = Chunk.Size - 1; y >= 0; y--)
                 {
-                    ref Block b = ref chunk.GetBlock(x, y, z);
-                    if (!b.IsTransparent) break;
+                    if (!chunk.GetBlock(x, y, z).IsTransparent) break;
 
                     int idx = Chunk.Index(x, y, z);
                     chunk.SunLight[idx] = MaxSunLight;
-
-                    queue.Enqueue((baseWx + x, baseWy + y, baseWz + z, MaxSunLight, true));
+                    queue.Enqueue(new LightNode(baseWx + x, baseWy + y, baseWz + z, MaxSunLight, isSun: true));
                 }
             }
     }
 
     /// <summary>
-    /// Seeds the BFS queue with block-light emitters inside <paramref name="chunk"/>.
-    /// Currently no block type emits light, so this is a no-op scaffold.
-    /// Torches (ID 4) would emit MaxBlockLight here.
+    /// Returns true when any loaded chunk above this column contains a solid block,
+    /// meaning no sunlight can reach this (x,z) column from the sky.
     /// </summary>
-    private static void SeedBlockLightChunk(
-        Chunk chunk,
-        Queue<(int, int, int, byte, bool)> queue)
+    private static bool IsColumnBlockedAbove(Chunk chunk, World world, int x, int z)
+    {
+        for (int cy = chunk.Position.Y + 1; cy < World.MaxChunkY; cy++)
+        {
+            var key = new Vector3i(chunk.Position.X, cy, chunk.Position.Z);
+            if (!world.Chunks.TryGetValue(key, out var above)) continue;
+            for (int ay = 0; ay < Chunk.Size; ay++)
+                if (!above.GetBlock(x, ay, z).IsTransparent) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Seeds the BFS queue with every block-light emitter inside
+    /// <paramref name="chunk"/> (e.g. torches at emission level 14).
+    /// </summary>
+    private static void SeedBlockLightChunk(Chunk chunk, Queue<LightNode> queue)
     {
         int bwx = chunk.Position.X * Chunk.Size;
         int bwy = chunk.Position.Y * Chunk.Size;
@@ -226,69 +209,75 @@ public static class LightEngine
             for (int y = 0; y < Chunk.Size; y++)
                 for (int x = 0; x < Chunk.Size; x++)
                 {
-                    ref Block b = ref chunk.GetBlock(x, y, z);
-                    byte emit = EmittedBlockLight(b.Id);
+                    byte emit = BlockLightEmission(chunk.GetBlock(x, y, z).Id);
                     if (emit == 0) continue;
 
                     int idx = Chunk.Index(x, y, z);
                     chunk.BlockLight[idx] = emit;
-                    queue.Enqueue((bwx + x, bwy + y, bwz + z, emit, false));
+                    queue.Enqueue(new LightNode(bwx + x, bwy + y, bwz + z, emit, isSun: false));
                 }
     }
 
-    /// <summary>Returns the block-light emission level for the given block ID.</summary>
-    private static byte EmittedBlockLight(ushort id) => id switch
+    /// <summary>Returns the block-light emission strength for the given block ID.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte BlockLightEmission(ushort id) => id switch
     {
-        4 => MaxBlockLight,  // Torch
+        4 => MaxBlockLight, // Torch
         _ => 0,
     };
 
     // -------------------------------------------------------------------------
-    // BFS flood-fill
+    // BFS flood-fill propagation
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Processes the BFS queue, spreading light through transparent voxels in
-    /// the loaded world.  Each step decrements the level by 1; propagation stops
-    /// when level reaches 1 (level 0 = no light).
+    /// Spreads light from every seed in <paramref name="queue"/> until the queue
+    /// is empty.
+    ///
+    /// SUNLIGHT RULE: when propagating downward (-Y) from a fully-bright sky voxel
+    ///   (level == MaxSunLight), pass the SAME level to the voxel below — no decay.
+    ///   This means an open sky column stays at 15 regardless of depth.  Any other
+    ///   direction (sideways, upward, or attenuated downward) decrements by 1.
+    ///
+    /// BLOCK LIGHT RULE: always decrement by 1 in all six directions.
     /// </summary>
-    private static void BfsPropagate(
-        World world,
-        Queue<(int wx, int wy, int wz, byte level, bool isSun)> queue)
+    private static void BfsPropagate(World world, Queue<LightNode> queue)
     {
         while (queue.Count > 0)
         {
-            var (wx, wy, wz, level, isSun) = queue.Dequeue();
+            var node = queue.Dequeue();
+            if (node.Level <= 1) continue;
 
-            if (level <= 1) continue;
-            byte nextLevel = (byte)(level - 1);
-
-            foreach (var (dx, dy, dz) in Neighbors6)
+            for (int f = 0; f < 6; f++)
             {
-                int nx = wx + dx;
-                int ny = wy + dy;
-                int nz = wz + dz;
+                var (dx, dy, dz) = Faces6[f];
+                int nx = node.Wx + dx;
+                int ny = node.Wy + dy;
+                int nz = node.Wz + dz;
 
-                // Resolve the chunk and local coordinates for the neighbour.
-                int ncx = (int)MathF.Floor((float)nx / Chunk.Size);
-                int ncy = (int)MathF.Floor((float)ny / Chunk.Size);
-                int ncz = (int)MathF.Floor((float)nz / Chunk.Size);
+                int ncx = ChunkCoord(nx);
+                int ncy = ChunkCoord(ny);
+                int ncz = ChunkCoord(nz);
 
                 if (!world.Chunks.TryGetValue(new Vector3i(ncx, ncy, ncz), out var nChunk))
-                    continue; // Outside loaded world.
+                    continue;
 
                 int lx = nx - ncx * Chunk.Size;
                 int ly = ny - ncy * Chunk.Size;
                 int lz = nz - ncz * Chunk.Size;
 
-                ref Block nb = ref nChunk.GetBlock(lx, ly, lz);
-                if (!nb.IsTransparent) continue; // Light can't enter solid blocks.
+                if (!nChunk.GetBlock(lx, ly, lz).IsTransparent) continue;
+
+                // Sunlight going straight down keeps full intensity;
+                // everything else (sideways, up, or attenuated descent) loses 1.
+                byte nextLevel = (node.IsSun && f == 1 && node.Level == MaxSunLight)
+                    ? MaxSunLight
+                    : (byte)(node.Level - 1);
 
                 int idx = Chunk.Index(lx, ly, lz);
-
-                if (isSun)
+                if (node.IsSun)
                 {
-                    if (nChunk.SunLight[idx] >= nextLevel) continue; // Already brighter.
+                    if (nChunk.SunLight[idx] >= nextLevel) continue;
                     nChunk.SunLight[idx] = nextLevel;
                 }
                 else
@@ -297,8 +286,20 @@ public static class LightEngine
                     nChunk.BlockLight[idx] = nextLevel;
                 }
 
-                queue.Enqueue((nx, ny, nz, nextLevel, isSun));
+                if (nextLevel > 1)
+                    queue.Enqueue(new LightNode(nx, ny, nz, nextLevel, node.IsSun));
             }
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Utility
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fast floor-division by <see cref="Chunk.Size"/> (32).
+    /// Correct for all integers, positive and negative.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ChunkCoord(int world) => world >> 5; // arithmetic right-shift = floor div by 32
 }

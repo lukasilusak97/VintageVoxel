@@ -42,6 +42,11 @@ public class Chunk
     public Chunk(OpenTK.Mathematics.Vector3i position)
     {
         Position = position;
+        // Ensure every block starts as transparent air before terrain generation
+        // fills in the solid blocks.  Without this, default-initialized blocks have
+        // IsTransparent = false (the bool zero value), which the light engine treats
+        // as solid — causing upper air chunks (Y>0) to block all sunlight.
+        Array.Fill(_blocks, Block.Air);
         Generate();
     }
 

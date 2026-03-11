@@ -55,7 +55,7 @@ public sealed class WorldRenderer : IDisposable
     private GpuMesh UploadChunkGpu(Chunk chunk)
     {
         ChunkMesh mesh = ChunkMeshBuilder.Build(chunk, _world);
-        return _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 7);
+        return _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 8);
     }
 
     /// <summary>
@@ -210,6 +210,11 @@ public sealed class WorldRenderer : IDisposable
         _shader.SetInt("uTexture", 0);
         int noTexMode = debug.LightingDebug ? 2 : (debug.NoTextures ? 1 : 0);
         _shader.SetInt("uNoTexture", noTexMode);
+
+        // Atmospheric fog: start at 60% of render distance, fully opaque at 95%.
+        float renderDist = World.RenderDistance * Chunk.Size;
+        _shader.SetFloat("uFogStart", renderDist * 0.60f);
+        _shader.SetFloat("uFogEnd", renderDist * 0.95f);
 
         var view = camera.GetViewMatrix();
         var projection = camera.GetProjectionMatrix();

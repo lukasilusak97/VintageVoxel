@@ -120,17 +120,37 @@ public sealed class GpuResourceManager : IDisposable
 
     private static void SetupAttribs(int stride)
     {
-        if (stride == 7)
+        if (stride == 8)
         {
-            // World / entity vertex layout: pos(3) + uv(2) + light(1) + ao(1)
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), 0);
+            // World / chunk vertex layout: pos(3) + uv(2) + sunLight(1) + blockLight(1) + ao(1)
+            int s = 8 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, s, 0);
             GL.EnableVertexAttribArray(0);
-            GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 7 * sizeof(float), 3 * sizeof(float));
+            GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, s, 3 * sizeof(float));
             GL.EnableVertexAttribArray(1);
-            GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 5 * sizeof(float));
+            GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, s, 5 * sizeof(float));
             GL.EnableVertexAttribArray(2);
-            GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), 6 * sizeof(float));
+            GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, s, 6 * sizeof(float));
             GL.EnableVertexAttribArray(3);
+            GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, s, 7 * sizeof(float));
+            GL.EnableVertexAttribArray(4);
+        }
+        else if (stride == 7)
+        {
+            // Entity / model vertex layout: pos(3) + uv(2) + light(1) + ao(1)
+            // Maps: attr2 = sunLight (combined), attr3 = blockLight (0), attr4 = ao
+            int s = 7 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, s, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, s, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+            GL.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, s, 5 * sizeof(float));
+            GL.EnableVertexAttribArray(2);
+            // blockLight is not in the buffer — use a standalone attrib default of 0.
+            GL.DisableVertexAttribArray(3);
+            GL.VertexAttrib1(3, 0.0f);
+            GL.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, s, 6 * sizeof(float));
+            GL.EnableVertexAttribArray(4);
         }
         else if (stride == 4)
         {
@@ -143,7 +163,7 @@ public sealed class GpuResourceManager : IDisposable
         else
         {
             GL.BindVertexArray(0);
-            throw new ArgumentException($"Unsupported vertex stride: {stride}. Expected 4 (HUD) or 7 (world/entity).");
+            throw new ArgumentException($"Unsupported vertex stride: {stride}. Expected 4 (HUD), 7 (entity/model), or 8 (world chunk).");
         }
     }
 }

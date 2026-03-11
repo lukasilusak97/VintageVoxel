@@ -144,6 +144,26 @@ public class World
         return Math.Max(chunk.SunLight[idx], chunk.BlockLight[idx]) / 15f;
     }
 
+    /// <summary>
+    /// Returns the separate sunlight and block-light levels [0,1] at the given
+    /// world coordinate.  Returns (1,0) for unloaded positions.
+    /// </summary>
+    public (float sun, float block) GetSunAndBlockLight(int worldX, int worldY, int worldZ)
+    {
+        int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
+        int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
+
+        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk))
+            return (1.0f, 0f);
+
+        int lx = worldX - cx * Chunk.Size;
+        int ly = worldY - cy * Chunk.Size;
+        int lz = worldZ - cz * Chunk.Size;
+        int idx = Chunk.Index(lx, ly, lz);
+        return (chunk.SunLight[idx] / 15f, chunk.BlockLight[idx] / 15f);
+    }
+
     // -------------------------------------------------------------------------
     // Block mutation (used by interaction / raycasting)
     // -------------------------------------------------------------------------
