@@ -32,6 +32,12 @@ public class EntityItem
     public Item Item { get; }
     public int Count { get; set; }
 
+    /// <summary>
+    /// Network-assigned entity ID for multiplayer synchronisation.
+    /// -1 means local-only (spawned in single-player or not yet tracked).
+    /// </summary>
+    public int NetworkId { get; set; } = -1;
+
     public Vector3 Position;
     public Vector3 Velocity;
 
@@ -76,10 +82,18 @@ public class EntityItem
 
         // --- Y axis: land on the block surface below ---
         int groundY = (int)MathF.Floor(next.Y - 0.05f);
-        if (!world.GetBlock(fx, groundY, fz).IsTransparent && Velocity.Y <= 0f)
+        bool onGround = !world.GetBlock(fx, groundY, fz).IsTransparent && Velocity.Y <= 0f;
+        if (onGround)
         {
             next.Y = groundY + 1f;
             Velocity.Y = 0f;
+            // Apply ground friction to bleed off horizontal momentum.
+            const float friction = 8f;
+            float speed = new Vector2(Velocity.X, Velocity.Z).Length;
+            float drop = speed * friction * dt;
+            float scale = speed > drop ? (speed - drop) / speed : 0f;
+            Velocity.X *= scale;
+            Velocity.Z *= scale;
         }
 
         // --- X axis ---

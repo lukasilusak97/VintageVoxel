@@ -38,6 +38,10 @@ public sealed class GameClient : IDisposable
     public event Action<PlayerStatePacket>? OnPlayerState;
     /// <summary>Raised when a chat message arrives.</summary>
     public event Action<ChatMessagePacket>? OnChatMessage;
+    /// <summary>Raised when a dropped-item entity appears in the world.</summary>
+    public event Action<EntityItemSpawnPacket>? OnEntityItemSpawn;
+    /// <summary>Raised when a dropped-item entity is removed (picked up or despawned).</summary>
+    public event Action<EntityItemRemovePacket>? OnEntityItemRemove;
     /// <summary>Raised when the connection drops or is rejected.</summary>
     public event Action<string>? OnDisconnected;
 
@@ -160,6 +164,12 @@ public sealed class GameClient : IDisposable
                 case PacketType.ChatMessage:
                     OnChatMessage?.Invoke(PacketSerializer.DeserializeChatMessage(reader));
                     break;
+                case PacketType.EntityItemSpawn:
+                    OnEntityItemSpawn?.Invoke(PacketSerializer.DeserializeEntityItemSpawn(reader));
+                    break;
+                case PacketType.EntityItemRemove:
+                    OnEntityItemRemove?.Invoke(PacketSerializer.DeserializeEntityItemRemove(reader));
+                    break;
             }
         }
     }
@@ -203,6 +213,30 @@ public sealed class GameClient : IDisposable
         if (_server == null || string.IsNullOrWhiteSpace(message)) return;
         _writer.Reset();
         PacketSerializer.Serialize(_writer, new ChatSendPacket { Message = message });
+        _server.Send(_writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Notifies the server that the local player dropped an item.</summary>
+    public void SendDropItem(int itemId, int count, Vector3 position, Vector3 velocity)
+    {
+        if (_server == null) return;
+        _writer.Reset();
+        PacketSerializer.Serialize(_writer, new DropItemPacket
+        {
+            ItemId = itemId,
+            Count = count,
+            Position = position,
+            Velocity = velocity,
+        });
+        _server.Send(_writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Notifies the server that the local player picked up a networked entity item.</summary>
+    public void SendPickupEntity(int entityId)
+    {
+        if (_server == null) return;
+        _writer.Reset();
+        PacketSerializer.Serialize(_writer, new PickupEntityPacket { EntityId = entityId });
         _server.Send(_writer, DeliveryMethod.ReliableOrdered);
     }
 }

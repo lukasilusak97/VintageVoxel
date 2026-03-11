@@ -11,10 +11,11 @@ namespace VintageVoxel;
 /// render radius need to be read from disk, with no seek cost across a
 /// monolithic save file.
 ///
-/// File layout  (c_{X}_{Z}.bin):
+/// File layout  (c_{X}_{Y}_{Z}.bin):
 ///   [4 bytes]  Magic "VVCK" — identifies the file type.
-///   [1 byte ]  Version = 1 — allows future format changes.
+///   [1 byte ]  Version = 2 — allows future format changes.
 ///   [4 bytes]  Chunk X (int32).
+///   [4 bytes]  Chunk Y (int32, vertical layer index).
 ///   [4 bytes]  Chunk Z (int32).
 ///   Block RLE:
 ///     [4 bytes]  Entry count (int32).
@@ -36,7 +37,7 @@ namespace VintageVoxel;
 public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
-    private const byte Version = 1;
+    private const byte Version = 2;
     private const int SubVolume = ChiseledBlockData.SubSize * ChiseledBlockData.SubSize * ChiseledBlockData.SubSize; // 4096
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
@@ -172,7 +173,7 @@ public static class WorldPersistence
     /// <summary>
     /// Serialises <paramref name="chunk"/> to a binary file inside <paramref name="folder"/>.
     /// </summary>
-    public static void SaveChunk(string folder, Vector2i key, Chunk chunk)
+    public static void SaveChunk(string folder, Vector3i key, Chunk chunk)
     {
         string path = GetChunkPath(folder, key);
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
@@ -180,9 +181,10 @@ public static class WorldPersistence
 
         // --- Header ---
         bw.Write(Magic);        // "VVCK"
-        bw.Write(Version);      // 1
+        bw.Write(Version);      // 2
         bw.Write(key.X);        // chunk X
-        bw.Write(key.Y);        // chunk Z
+        bw.Write(key.Y);        // chunk Y (vertical layer)
+        bw.Write(key.Z);        // chunk Z
 
         // --- Block RLE ---
         // Collect (id, runLength) pairs over the entire flat block array.
@@ -211,7 +213,7 @@ public static class WorldPersistence
     /// </summary>
     public static bool TryLoadChunk(
         string folder,
-        Vector2i key,
+        Vector3i key,
         [NotNullWhen(true)] out Chunk? chunk)
     {
         chunk = null;
@@ -232,12 +234,13 @@ public static class WorldPersistence
             if (version != Version) return false;
 
             int cx = br.ReadInt32();
+            int cy = br.ReadInt32();
             int cz = br.ReadInt32();
-            if (cx != key.X || cz != key.Y) return false; // Sanity check.
+            if (cx != key.X || cy != key.Y || cz != key.Z) return false; // Sanity check.
 
             // Allocate a chunk that skips terrain generation — its _blocks will
             // be entirely overwritten by the saved data below.
-            chunk = Chunk.CreateForDeserialization(new Vector3i(cx, 0, cz));
+            chunk = Chunk.CreateForDeserialization(new Vector3i(cx, cy, cz));
 
             // Decode block RLE into the chunk's internal array.
             ushort[] blockIds = ReadBlockRle(br);
@@ -356,8 +359,8 @@ public static class WorldPersistence
     // Utility
     // -------------------------------------------------------------------------
 
-    private static string GetChunkPath(string folder, Vector2i key) =>
-        Path.Combine(folder, $"c_{key.X}_{key.Y}.bin");
+    private static string GetChunkPath(string folder, Vector3i key) =>
+        Path.Combine(folder, $"c_{key.X}_{key.Y}_{key.Z}.bin");
 
     // -------------------------------------------------------------------------
     // Player data

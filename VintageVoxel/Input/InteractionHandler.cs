@@ -60,11 +60,12 @@ public sealed class InteractionHandler
                                 hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
                             _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
                             int cx = (int)MathF.Floor((float)hit.BlockPos.X / Chunk.Size);
+                            int cy = (int)MathF.Floor((float)hit.BlockPos.Y / Chunk.Size);
                             int cz = (int)MathF.Floor((float)hit.BlockPos.Z / Chunk.Size);
-                            if (_world.Chunks.TryGetValue(new Vector2i(cx, cz), out var ch))
+                            if (_world.Chunks.TryGetValue(new Vector3i(cx, cy, cz), out var ch))
                                 ch.ChiseledBlocks.Remove(Chunk.Index(
                                     hit.BlockPos.X - cx * Chunk.Size,
-                                    hit.BlockPos.Y,
+                                    hit.BlockPos.Y - cy * Chunk.Size,
                                     hit.BlockPos.Z - cz * Chunk.Size));
                             LightEngine.UpdateAtBlock(hit.BlockPos, _world);
                             SpawnBlockDrop(chiseledId, hit.BlockPos);
@@ -121,9 +122,10 @@ public sealed class InteractionHandler
                 _world.SetBlock(wx, wy, wz, new Block { Id = Block.ChiseledId, IsTransparent = false });
 
                 int cx = (int)MathF.Floor((float)wx / Chunk.Size);
+                int cy = (int)MathF.Floor((float)wy / Chunk.Size);
                 int cz = (int)MathF.Floor((float)wz / Chunk.Size);
-                if (_world.Chunks.TryGetValue(new Vector2i(cx, cz), out var chunk))
-                    chunk.GetOrCreateChiseled(wx - cx * Chunk.Size, wy, wz - cz * Chunk.Size, origId);
+                if (_world.Chunks.TryGetValue(new Vector3i(cx, cy, cz), out var chunk))
+                    chunk.GetOrCreateChiseled(wx - cx * Chunk.Size, wy - cy * Chunk.Size, wz - cz * Chunk.Size, origId);
 
                 LightEngine.UpdateAtBlock(hit.BlockPos, _world);
                 _renderer.RebuildAffectedChunks(hit.BlockPos);
@@ -143,7 +145,15 @@ public sealed class InteractionHandler
             {
                 var spawnPos = _camera.Position + _camera.Front * 0.8f;
                 var impulse = _camera.Front * 5f + new Vector3(0f, 2f, 0f);
-                _entityItems.Add(new EntityItem(dropItem, removed, spawnPos, impulse));
+                if (NetworkClient != null)
+                {
+                    // Server will broadcast EntityItemSpawnPacket back to all clients.
+                    NetworkClient.SendDropItem(dropItem.Id, removed, spawnPos, impulse);
+                }
+                else
+                {
+                    _entityItems.Add(new EntityItem(dropItem, removed, spawnPos, impulse));
+                }
             }
         }
     }
@@ -162,19 +172,24 @@ public sealed class InteractionHandler
     private void PlaceHeldBlock(int wx, int wy, int wz)
     {
         ref var held = ref _inventory.HeldStack;
+        if (held.IsEmpty) return;
+
         var blockPos = new Vector3i(wx, wy, wz);
 
-        if (!held.IsEmpty && held.Item!.Type == ItemType.Model)
+        if (held.Item!.Type == ItemType.Model)
         {
-            _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)held.Item.Id, IsTransparent = true });
+            var item = held.Item;
+            _inventory.RemoveItem(item, 1);
+            _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)item.Id, IsTransparent = true });
             LightEngine.UpdateAtBlock(blockPos, _world);
-            _renderer.AddPlacedModel(blockPos, held.Item);
+            _renderer.AddPlacedModel(blockPos, item);
             _renderer.RebuildAffectedChunks(blockPos);
-            NetworkClient?.SendPlayerAction(PlayerActionKind.Place, blockPos, (ushort)held.Item.Id, Vector3i.Zero);
+            NetworkClient?.SendPlayerAction(PlayerActionKind.Place, blockPos, (ushort)item.Id, Vector3i.Zero);
             return;
         }
 
-        ushort id = held.IsEmpty ? (ushort)2 : (ushort)held.Item!.Id;
+        ushort id = (ushort)held.Item!.Id;
+        _inventory.RemoveItem(held.Item!, 1);
         _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
         LightEngine.UpdateAtBlock(blockPos, _world);
         _renderer.RebuildAffectedChunks(blockPos);
@@ -183,6 +198,9 @@ public sealed class InteractionHandler
 
     private void SpawnBlockDrop(ushort blockId, Vector3i blockPos)
     {
+        // In multiplayer the server handles drops and broadcasts EntityItemSpawnPacket.
+        if (NetworkClient != null) return;
+
         var item = ItemRegistry.Get(blockId);
         if (item == null) return;
         var spawnPos = new Vector3(blockPos.X + 0.5f, blockPos.Y + 0.5f, blockPos.Z + 0.5f);

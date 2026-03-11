@@ -40,7 +40,7 @@ public static class LightEngine
     private const byte MaxBlockLight = 14; // Torches (when added)
 
     // Chunk keys that need a light recompute on the next FlushDirty call.
-    private static readonly HashSet<Vector2i> _pendingDirty = new();
+    private static readonly HashSet<Vector3i> _pendingDirty = new();
 
     // Axis-aligned neighbour offsets (6-connected face adjacency).
     private static readonly (int dx, int dy, int dz)[] Neighbors6 =
@@ -90,7 +90,9 @@ public static class LightEngine
 
         var queue = new Queue<(int wx, int wy, int wz, byte level, bool isSun)>();
 
-        foreach (var chunk in world.Chunks.Values)
+        // Seed top-to-bottom so that when a lower chunk checks the layer above
+        // for sky-open columns, the upper chunk is already seeded.
+        foreach (var chunk in world.Chunks.Values.OrderByDescending(c => c.Position.Y))
             SeedSunlightChunk(chunk, world, queue);
 
         BfsPropagate(world, queue);
@@ -106,13 +108,16 @@ public static class LightEngine
     public static void UpdateAtBlock(Vector3i blockPos, World world)
     {
         int cx = (int)MathF.Floor((float)blockPos.X / Chunk.Size);
+        int cy = (int)MathF.Floor((float)blockPos.Y / Chunk.Size);
         int cz = (int)MathF.Floor((float)blockPos.Z / Chunk.Size);
 
-        _pendingDirty.Add(new Vector2i(cx, cz));
-        _pendingDirty.Add(new Vector2i(cx - 1, cz));
-        _pendingDirty.Add(new Vector2i(cx + 1, cz));
-        _pendingDirty.Add(new Vector2i(cx, cz - 1));
-        _pendingDirty.Add(new Vector2i(cx, cz + 1));
+        _pendingDirty.Add(new Vector3i(cx, cy, cz));
+        _pendingDirty.Add(new Vector3i(cx - 1, cy, cz));
+        _pendingDirty.Add(new Vector3i(cx + 1, cy, cz));
+        _pendingDirty.Add(new Vector3i(cx, cy - 1, cz));
+        _pendingDirty.Add(new Vector3i(cx, cy + 1, cz));
+        _pendingDirty.Add(new Vector3i(cx, cy, cz - 1));
+        _pendingDirty.Add(new Vector3i(cx, cy, cz + 1));
     }
 
     /// <summary>
@@ -121,14 +126,16 @@ public static class LightEngine
     /// dirty set.  Returns the set of chunk keys whose light data changed
     /// so the caller can schedule mesh rebuilds for them.
     /// </summary>
-    public static HashSet<Vector2i> FlushDirty(World world)
+    public static HashSet<Vector3i> FlushDirty(World world)
     {
         if (_pendingDirty.Count == 0)
-            return new HashSet<Vector2i>();
+            return new HashSet<Vector3i>();
 
         var queue = new Queue<(int, int, int, byte, bool)>();
 
-        foreach (var key in _pendingDirty)
+        // Seed top-to-bottom: upper layers must be seeded first so lower-layer
+        // seeding can correctly test whether a column is sky-open from above.
+        foreach (var key in _pendingDirty.OrderByDescending(k => k.Y))
         {
             if (!world.Chunks.TryGetValue(key, out var chunk)) continue;
             System.Array.Clear(chunk.SunLight, 0, Chunk.Volume);
@@ -139,7 +146,7 @@ public static class LightEngine
 
         BfsPropagate(world, queue);
 
-        var relit = new HashSet<Vector2i>(_pendingDirty);
+        var relit = new HashSet<Vector3i>(_pendingDirty);
         _pendingDirty.Clear();
         return relit;
     }
@@ -164,14 +171,31 @@ public static class LightEngine
         Queue<(int, int, int, byte, bool)> queue)
     {
         int baseWx = chunk.Position.X * Chunk.Size;
+        int baseWy = chunk.Position.Y * Chunk.Size;
         int baseWz = chunk.Position.Z * Chunk.Size;
+
+        // For chunks below the world ceiling, only seed a column if no solid block
+        // exists anywhere above it in the loaded world.  We check the actual block
+        // data (not light values) so this is correct regardless of seeding order.
+        // For the topmost chunk (Position.Y == MaxChunkY-1) every column is sky-open.
+        bool isTopLayer = (chunk.Position.Y == World.MaxChunkY - 1);
 
         for (int z = 0; z < Chunk.Size; z++)
             for (int x = 0; x < Chunk.Size; x++)
             {
-                // Check if the block directly above the chunk top is air
-                // (i.e. this column has sky above — which it always does in our
-                // single-vertical-layer world).
+                if (!isTopLayer)
+                {
+                    bool blocked = false;
+                    for (int cy = chunk.Position.Y + 1; cy < World.MaxChunkY && !blocked; cy++)
+                    {
+                        var aboveKey = new Vector3i(chunk.Position.X, cy, chunk.Position.Z);
+                        if (!world.Chunks.TryGetValue(aboveKey, out var aboveChunk)) continue;
+                        for (int ay = 0; ay < Chunk.Size && !blocked; ay++)
+                            if (!aboveChunk.GetBlock(x, ay, z).IsTransparent) blocked = true;
+                    }
+                    if (blocked) continue;
+                }
+
                 for (int y = Chunk.Size - 1; y >= 0; y--)
                 {
                     ref Block b = ref chunk.GetBlock(x, y, z);
@@ -180,11 +204,7 @@ public static class LightEngine
                     int idx = Chunk.Index(x, y, z);
                     chunk.SunLight[idx] = MaxSunLight;
 
-                    // Enqueue for horizontal spread only — vertical already filled above.
-                    int wx = baseWx + x;
-                    int wy = y;
-                    int wz = baseWz + z;
-                    queue.Enqueue((wx, wy, wz, MaxSunLight, true));
+                    queue.Enqueue((baseWx + x, baseWy + y, baseWz + z, MaxSunLight, true));
                 }
             }
     }
@@ -199,6 +219,7 @@ public static class LightEngine
         Queue<(int, int, int, byte, bool)> queue)
     {
         int bwx = chunk.Position.X * Chunk.Size;
+        int bwy = chunk.Position.Y * Chunk.Size;
         int bwz = chunk.Position.Z * Chunk.Size;
 
         for (int z = 0; z < Chunk.Size; z++)
@@ -211,7 +232,7 @@ public static class LightEngine
 
                     int idx = Chunk.Index(x, y, z);
                     chunk.BlockLight[idx] = emit;
-                    queue.Enqueue((bwx + x, y, bwz + z, emit, false));
+                    queue.Enqueue((bwx + x, bwy + y, bwz + z, emit, false));
                 }
     }
 
@@ -250,21 +271,20 @@ public static class LightEngine
 
                 // Resolve the chunk and local coordinates for the neighbour.
                 int ncx = (int)MathF.Floor((float)nx / Chunk.Size);
+                int ncy = (int)MathF.Floor((float)ny / Chunk.Size);
                 int ncz = (int)MathF.Floor((float)nz / Chunk.Size);
 
-                if (!world.Chunks.TryGetValue(new Vector2i(ncx, ncz), out var nChunk))
+                if (!world.Chunks.TryGetValue(new Vector3i(ncx, ncy, ncz), out var nChunk))
                     continue; // Outside loaded world.
 
-                if ((uint)ny >= (uint)Chunk.Size)
-                    continue; // Outside vertical chunk bounds.
-
                 int lx = nx - ncx * Chunk.Size;
+                int ly = ny - ncy * Chunk.Size;
                 int lz = nz - ncz * Chunk.Size;
 
-                ref Block nb = ref nChunk.GetBlock(lx, ny, lz);
+                ref Block nb = ref nChunk.GetBlock(lx, ly, lz);
                 if (!nb.IsTransparent) continue; // Light can't enter solid blocks.
 
-                int idx = Chunk.Index(lx, ny, lz);
+                int idx = Chunk.Index(lx, ly, lz);
 
                 if (isSun)
                 {

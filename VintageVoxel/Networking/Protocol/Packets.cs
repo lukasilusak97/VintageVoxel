@@ -16,11 +16,15 @@ public enum PacketType : byte
     PlayerLeave = 5,   // another player disconnected
     PlayerState = 6,   // position + look angles (broadcast to all other peers)
     ChatMessage = 7,   // in-game chat line
+    EntityItemSpawn = 8,   // a dropped-item entity appeared in the world
+    EntityItemRemove = 9,  // a dropped-item entity was picked up / despawned
 
     // Client → Server
     PlayerAction = 20,  // break / place / middle-click block
     PlayerStateC = 21,  // client's own position + look angles (→ server for relay)
     ChatSend = 22,  // client sends a chat message to the server
+    DropItem = 23,  // client dropped an item into the world
+    PickupEntity = 24, // client picked up a networked entity item
 }
 
 /// <summary>Player action kinds sent in <see cref="PlayerActionPacket"/>.</summary>
@@ -46,7 +50,7 @@ public sealed class WorldInfoPacket
 /// <summary>Full block data for one 32×32×32 chunk, RLE-compressed.</summary>
 public sealed class ChunkDataPacket
 {
-    public Vector2i ChunkCoord;
+    public Vector3i ChunkCoord;
     /// <summary>RLE-encoded block IDs (same format as WorldPersistence).</summary>
     public byte[] BlockData = Array.Empty<byte>();
 }
@@ -115,4 +119,39 @@ public sealed class PlayerStateClientPacket
 public sealed class ChatSendPacket
 {
     public string Message = "";
+}
+
+// ---------------------------------------------------------------------------
+// Entity item packets
+// ---------------------------------------------------------------------------
+
+/// <summary>Tells all clients that a dropped-item entity has appeared in the world.</summary>
+public sealed class EntityItemSpawnPacket
+{
+    public int EntityId;
+    public int ItemId;
+    public int Count;
+    public Vector3 Position;
+    public Vector3 Velocity;
+}
+
+/// <summary>Tells all clients that a dropped-item entity was picked up or removed.</summary>
+public sealed class EntityItemRemovePacket
+{
+    public int EntityId;
+}
+
+/// <summary>Client notifies the server that it dropped an item into the world.</summary>
+public sealed class DropItemPacket
+{
+    public int ItemId;
+    public int Count;
+    public Vector3 Position;
+    public Vector3 Velocity;
+}
+
+/// <summary>Client notifies the server that it picked up a networked entity item.</summary>
+public sealed class PickupEntityPacket
+{
+    public int EntityId;
 }

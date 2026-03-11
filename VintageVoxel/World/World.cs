@@ -5,9 +5,10 @@ namespace VintageVoxel;
 /// <summary>
 /// Manages the collection of loaded chunks in an infinite procedural world.
 ///
-/// Chunks are keyed by 2-D chunk-space coordinates (X, Z), where one unit equals
+/// Chunks are keyed by 3-D chunk-space coordinates (X, Y, Z), where one unit equals
 /// Chunk.Size (32) world blocks.  The world is infinite horizontally; vertically
-/// there is a single chunk layer (block Y in [0, Chunk.Size)).
+/// chunks span from Y=0 to Y=MaxChunkY-1, giving MaxChunkY*Chunk.Size world blocks
+/// of build height.
 ///
 /// Call <see cref="Update"/> every frame with the camera/player position.  The
 /// method generates missing chunks within <see cref="RenderDistance"/> and unloads
@@ -24,14 +25,17 @@ public class World
     /// </summary>
     public const int RenderDistance = 4; // 9x9 grid — comfortable view distance
 
+    /// <summary>Number of vertical chunk layers (Y=0 to MaxChunkY-1). Total build height = MaxChunkY * Chunk.Size.</summary>
+    public const int MaxChunkY = 8; // 256 blocks max build height
+
     // Extra buffer before a chunk is unloaded.  Prevents rapid thrashing when
     // the player walks back and forth across a chunk boundary.
     private const int UnloadDistance = RenderDistance + 2;
 
-    private readonly Dictionary<Vector2i, Chunk> _chunks = new();
+    private readonly Dictionary<Vector3i, Chunk> _chunks = new();
 
     /// <summary>Read-only view of the currently active chunks.</summary>
-    public IReadOnlyDictionary<Vector2i, Chunk> Chunks => _chunks;
+    public IReadOnlyDictionary<Vector3i, Chunk> Chunks => _chunks;
 
     // -------------------------------------------------------------------------
     // Coordinate utilities
@@ -52,29 +56,21 @@ public class World
 
     /// <summary>
     /// Returns the block at the given world-space integer coordinates.
-    ///
-    /// Returns <see cref="Block.Air"/> when:
-    ///   • worldY is outside the single vertical chunk layer [0, Chunk.Size), or
-    ///   • the owning chunk has not been loaded yet.
-    ///
-    /// The second case intentionally exposes chunk boundary faces toward unloaded
-    /// neighbours so newly appearing chunks mesh correctly on arrival.
+    /// Returns <see cref="Block.Air"/> when the owning chunk has not been loaded.
     /// </summary>
     public Block GetBlock(int worldX, int worldY, int worldZ)
     {
-        if ((uint)worldY >= (uint)Chunk.Size)
-            return Block.Air;
-
-        // Fast floor for negative world coordinates.
         int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
         int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
 
-        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk))
+        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk))
             return Block.Air;
 
         int lx = worldX - cx * Chunk.Size;
+        int ly = worldY - cy * Chunk.Size;
         int lz = worldZ - cz * Chunk.Size;
-        return chunk.GetBlock(lx, worldY, lz);
+        return chunk.GetBlock(lx, ly, lz);
     }
 
     // -------------------------------------------------------------------------
@@ -91,33 +87,32 @@ public class World
     /// The caller uses these lists to allocate or release GPU resources.
     /// </summary>
     public void Update(Vector3 playerPos,
-                       out List<Vector2i> added,
-                       out List<Vector2i> removed)
+                       out List<Vector3i> added,
+                       out List<Vector3i> removed)
     {
-        added = new List<Vector2i>();
-        removed = new List<Vector2i>();
+        added = new List<Vector3i>();
+        removed = new List<Vector3i>();
 
         Vector2i center = WorldToChunk(playerPos);
 
-        // Generate missing chunks within the render square.
+        // Generate missing chunks within the render square, across all vertical layers.
         for (int dz = -RenderDistance; dz <= RenderDistance; dz++)
             for (int dx = -RenderDistance; dx <= RenderDistance; dx++)
-            {
-                var key = new Vector2i(center.X + dx, center.Y + dz);
-                if (!_chunks.ContainsKey(key))
+                for (int cy = 0; cy < MaxChunkY; cy++)
                 {
-                    // Position.Y = 0: single vertical chunk layer.
-                    _chunks[key] = new Chunk(new Vector3i(key.X, 0, key.Y));
-                    added.Add(key);
+                    var key = new Vector3i(center.X + dx, cy, center.Y + dz);
+                    if (!_chunks.ContainsKey(key))
+                    {
+                        _chunks[key] = new Chunk(key);
+                        added.Add(key);
+                    }
                 }
-            }
 
-        // Unload chunks that moved outside the buffer zone.
-        // Iterating over a copy allows safe removal during the loop.
-        foreach (var key in new List<Vector2i>(_chunks.Keys))
+        // Unload chunks whose XZ column moved outside the buffer zone.
+        foreach (var key in new List<Vector3i>(_chunks.Keys))
         {
             if (Math.Abs(key.X - center.X) > UnloadDistance ||
-                Math.Abs(key.Y - center.Y) > UnloadDistance)
+                Math.Abs(key.Z - center.Y) > UnloadDistance)
             {
                 _chunks.Remove(key);
                 removed.Add(key);
@@ -131,22 +126,21 @@ public class World
 
     /// <summary>
     /// Returns the combined light level [0,1] at the given world coordinate.
-    /// Returns 1.0 for out-of-range or unloaded positions (full-bright at boundaries).
+    /// Returns 1.0 for unloaded positions (full-bright at boundaries).
     /// </summary>
     public float GetLight(int worldX, int worldY, int worldZ)
     {
-        if ((uint)worldY >= (uint)Chunk.Size)
-            return 1.0f;
-
         int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
         int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
 
-        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk))
+        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk))
             return 1.0f;
 
         int lx = worldX - cx * Chunk.Size;
+        int ly = worldY - cy * Chunk.Size;
         int lz = worldZ - cz * Chunk.Size;
-        int idx = Chunk.Index(lx, worldY, lz);
+        int idx = Chunk.Index(lx, ly, lz);
         return Math.Max(chunk.SunLight[idx], chunk.BlockLight[idx]) / 15f;
     }
 
@@ -156,21 +150,20 @@ public class World
 
     /// <summary>
     /// Writes <paramref name="block"/> to the given world-space integer coordinates.
-    /// Returns <c>false</c> if the position is out of the vertical range or the
-    /// owning chunk is not currently loaded.
+    /// Returns <c>false</c> if the owning chunk is not currently loaded.
     /// </summary>
     public bool SetBlock(int worldX, int worldY, int worldZ, Block block)
     {
-        if ((uint)worldY >= (uint)Chunk.Size) return false;
-
         int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
         int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
 
-        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk)) return false;
+        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk)) return false;
 
         int lx = worldX - cx * Chunk.Size;
+        int ly = worldY - cy * Chunk.Size;
         int lz = worldZ - cz * Chunk.Size;
-        ref Block b = ref chunk.GetBlock(lx, worldY, lz);
+        ref Block b = ref chunk.GetBlock(lx, ly, lz);
         b = block;
         return true;
     }
@@ -186,16 +179,16 @@ public class World
     /// </summary>
     public ChiseledBlockData? GetChiselData(int worldX, int worldY, int worldZ)
     {
-        if ((uint)worldY >= (uint)Chunk.Size) return null;
-
         int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
+        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
         int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
 
-        if (!_chunks.TryGetValue(new Vector2i(cx, cz), out Chunk? chunk)) return null;
+        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk)) return null;
 
         int lx = worldX - cx * Chunk.Size;
+        int ly = worldY - cy * Chunk.Size;
         int lz = worldZ - cz * Chunk.Size;
-        int idx = Chunk.Index(lx, worldY, lz);
+        int idx = Chunk.Index(lx, ly, lz);
         chunk.ChiseledBlocks.TryGetValue(idx, out var chisel);
         return chisel;
     }
@@ -210,5 +203,5 @@ public class World
     /// the freshly-generated chunk for the player's saved version immediately
     /// after <see cref="Update"/> creates the slot.
     /// </summary>
-    public void ReplaceChunk(Vector2i key, Chunk chunk) => _chunks[key] = chunk;
+    public void ReplaceChunk(Vector3i key, Chunk chunk) => _chunks[key] = chunk;
 }

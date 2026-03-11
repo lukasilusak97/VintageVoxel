@@ -14,7 +14,7 @@ public sealed class WorldRenderer : IDisposable
     // GPU handle bundle for one loaded item model.
     private readonly record struct ModelGpu(GpuMesh Mesh, int TexHandle);
 
-    private readonly Dictionary<Vector2i, GpuMesh> _chunkGpuData = new();
+    private readonly Dictionary<Vector3i, GpuMesh> _chunkGpuData = new();
     private readonly Dictionary<int, ModelGpu> _modelGpu = new();
     private readonly Dictionary<Vector3i, EntityItem> _placedModels = new();
 
@@ -62,7 +62,7 @@ public sealed class WorldRenderer : IDisposable
     /// Re-meshes and re-uploads the chunk at <paramref name="key"/>, replacing any
     /// existing GPU data. Does nothing if the chunk is not loaded.
     /// </summary>
-    public void RebuildChunk(Vector2i key)
+    public void RebuildChunk(Vector3i key)
     {
         if (!_world.Chunks.TryGetValue(key, out var chunk)) return;
         if (_chunkGpuData.TryGetValue(key, out var old)) _gpu.Free(old);
@@ -70,7 +70,7 @@ public sealed class WorldRenderer : IDisposable
     }
 
     /// <summary>Frees the GPU mesh for <paramref name="key"/> and removes it from the cache.</summary>
-    public void TryFreeChunkGpu(Vector2i key)
+    public void TryFreeChunkGpu(Vector3i key)
     {
         if (!_chunkGpuData.TryGetValue(key, out var gpu)) return;
         _gpu.Free(gpu);
@@ -84,15 +84,19 @@ public sealed class WorldRenderer : IDisposable
     public void RebuildAffectedChunks(Vector3i blockPos)
     {
         int cx = (int)MathF.Floor((float)blockPos.X / Chunk.Size);
+        int cy = (int)MathF.Floor((float)blockPos.Y / Chunk.Size);
         int cz = (int)MathF.Floor((float)blockPos.Z / Chunk.Size);
-        RebuildChunk(new Vector2i(cx, cz));
+        RebuildChunk(new Vector3i(cx, cy, cz));
 
         int lx = blockPos.X - cx * Chunk.Size;
+        int ly = blockPos.Y - cy * Chunk.Size;
         int lz = blockPos.Z - cz * Chunk.Size;
-        if (lx == 0) RebuildChunk(new Vector2i(cx - 1, cz));
-        if (lx == Chunk.Size - 1) RebuildChunk(new Vector2i(cx + 1, cz));
-        if (lz == 0) RebuildChunk(new Vector2i(cx, cz - 1));
-        if (lz == Chunk.Size - 1) RebuildChunk(new Vector2i(cx, cz + 1));
+        if (lx == 0) RebuildChunk(new Vector3i(cx - 1, cy, cz));
+        if (lx == Chunk.Size - 1) RebuildChunk(new Vector3i(cx + 1, cy, cz));
+        if (ly == 0) RebuildChunk(new Vector3i(cx, cy - 1, cz));
+        if (ly == Chunk.Size - 1) RebuildChunk(new Vector3i(cx, cy + 1, cz));
+        if (lz == 0) RebuildChunk(new Vector3i(cx, cy, cz - 1));
+        if (lz == Chunk.Size - 1) RebuildChunk(new Vector3i(cx, cy, cz + 1));
     }
 
     // -------------------------------------------------------------------------
@@ -118,12 +122,13 @@ public sealed class WorldRenderer : IDisposable
     public void RemovePlacedModel(Vector3i pos) => _placedModels.Remove(pos);
 
     /// <summary>Removes all placed models that belong to chunk <paramref name="key"/>.</summary>
-    public void EvictChunkPlacedModels(Vector2i key)
+    public void EvictChunkPlacedModels(Vector3i key)
     {
         int minX = key.X * Chunk.Size, maxX = (key.X + 1) * Chunk.Size;
-        int minZ = key.Y * Chunk.Size, maxZ = (key.Y + 1) * Chunk.Size;
+        int minY = key.Y * Chunk.Size, maxY = (key.Y + 1) * Chunk.Size;
+        int minZ = key.Z * Chunk.Size, maxZ = (key.Z + 1) * Chunk.Size;
         foreach (var pos in _placedModels.Keys
-            .Where(p => p.X >= minX && p.X < maxX && p.Z >= minZ && p.Z < maxZ)
+            .Where(p => p.X >= minX && p.X < maxX && p.Y >= minY && p.Y < maxY && p.Z >= minZ && p.Z < maxZ)
             .ToList())
             _placedModels.Remove(pos);
     }
@@ -249,13 +254,14 @@ public sealed class WorldRenderer : IDisposable
             if (gpu.IndexCount == 0) continue;
 
             int wx = key.X * Chunk.Size;
-            int wz = key.Y * Chunk.Size;
+            int wy = key.Y * Chunk.Size;
+            int wz = key.Z * Chunk.Size;
             if (!frustum.ContainsAabb(
-                    new Vector3(wx, 0f, wz),
-                    new Vector3(wx + Chunk.Size, Chunk.Size, wz + Chunk.Size)))
+                    new Vector3(wx, wy, wz),
+                    new Vector3(wx + Chunk.Size, wy + Chunk.Size, wz + Chunk.Size)))
                 continue;
 
-            var model = Matrix4.CreateTranslation(wx, 0f, wz);
+            var model = Matrix4.CreateTranslation(wx, wy, wz);
             _shader.SetMatrix4("model", ref model);
 
             GL.BindVertexArray(gpu.Vao);

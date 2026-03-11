@@ -39,7 +39,7 @@ public sealed class GameServer : IDisposable
         public float Yaw;
         public float Pitch;
         /// <summary>Chunk coords already sent to this client (no need to resend).</summary>
-        public readonly HashSet<Vector2i> SentChunks = new();
+        public readonly HashSet<Vector3i> SentChunks = new();
     }
 
     // -------------------------------------------------------------------------
@@ -61,6 +61,10 @@ public sealed class GameServer : IDisposable
     private readonly Dictionary<int, ConnectedPlayer> _players = new(); // keyed by peer.Id
     private readonly NetDataWriter _writer = new();
     private readonly LanDiscovery _discovery = new();
+
+    /// <summary>Server-side entity items keyed by their network-assigned ID.</summary>
+    private readonly Dictionary<int, (int ItemId, int Count)> _serverEntityItems = new();
+    private int _nextEntityId = 1;
 
     /// <summary>Number of players currently connected.</summary>
     public int PlayerCount => _players.Count;
@@ -245,6 +249,12 @@ public sealed class GameServer : IDisposable
             case PacketType.ChatSend:
                 HandleChat(cp, PacketSerializer.DeserializeChatSend(reader));
                 break;
+            case PacketType.DropItem:
+                HandleDropItem(cp, PacketSerializer.DeserializeDropItem(reader));
+                break;
+            case PacketType.PickupEntity:
+                HandlePickupEntity(cp, PacketSerializer.DeserializePickupEntity(reader));
+                break;
         }
 
         reader.Recycle();
@@ -281,15 +291,21 @@ public sealed class GameServer : IDisposable
         switch (p.Kind)
         {
             case PlayerActionKind.Break:
-                _world.SetBlock(p.BlockPos.X, p.BlockPos.Y, p.BlockPos.Z, Block.Air);
-                LightEngine.UpdateAtBlock(p.BlockPos, _world);
-                BroadcastAll(w =>
-                    PacketSerializer.Serialize(w, new BlockUpdatePacket
-                    {
-                        BlockPos = p.BlockPos,
-                        BlockId = Block.Air.Id,
-                    }), DeliveryMethod.ReliableOrdered);
-                break;
+                {
+                    ushort brokenId = _world.GetBlock(p.BlockPos.X, p.BlockPos.Y, p.BlockPos.Z).Id;
+                    _world.SetBlock(p.BlockPos.X, p.BlockPos.Y, p.BlockPos.Z, Block.Air);
+                    LightEngine.UpdateAtBlock(p.BlockPos, _world);
+                    BroadcastAll(w =>
+                        PacketSerializer.Serialize(w, new BlockUpdatePacket
+                        {
+                            BlockPos = p.BlockPos,
+                            BlockId = Block.Air.Id,
+                        }), DeliveryMethod.ReliableOrdered);
+                    // Spawn a dropped item entity for the broken block.
+                    var dropPos = new Vector3(p.BlockPos.X + 0.5f, p.BlockPos.Y + 0.5f, p.BlockPos.Z + 0.5f);
+                    SpawnEntityItem(brokenId, 1, dropPos, new Vector3(0f, 3f, 0f));
+                    break;
+                }
 
             case PlayerActionKind.Place:
                 {
@@ -321,6 +337,54 @@ public sealed class GameServer : IDisposable
             }), DeliveryMethod.ReliableOrdered);
     }
 
+    private void HandleDropItem(ConnectedPlayer cp, DropItemPacket p)
+    {
+        // Basic validation: item count must be positive.
+        if (p.Count <= 0) return;
+
+        int entityId = _nextEntityId++;
+        _serverEntityItems[entityId] = (p.ItemId, p.Count);
+
+        BroadcastAll(w =>
+            PacketSerializer.Serialize(w, new EntityItemSpawnPacket
+            {
+                EntityId = entityId,
+                ItemId = p.ItemId,
+                Count = p.Count,
+                Position = p.Position,
+                Velocity = p.Velocity,
+            }), DeliveryMethod.ReliableOrdered);
+    }
+
+    private void HandlePickupEntity(ConnectedPlayer cp, PickupEntityPacket p)
+    {
+        // Only process if the entity still exists (prevents double-pickup).
+        if (!_serverEntityItems.Remove(p.EntityId)) return;
+
+        // Notify all OTHER clients to remove the entity; the requester already removed it locally.
+        BroadcastExcept(cp.Peer.Id, w =>
+            PacketSerializer.Serialize(w, new EntityItemRemovePacket { EntityId = p.EntityId }),
+            DeliveryMethod.ReliableOrdered);
+    }
+
+    private void SpawnEntityItem(int itemId, int count, Vector3 position, Vector3 velocity)
+    {
+        if (ItemRegistry.Get(itemId) == null) return;
+
+        int entityId = _nextEntityId++;
+        _serverEntityItems[entityId] = (itemId, count);
+
+        BroadcastAll(w =>
+            PacketSerializer.Serialize(w, new EntityItemSpawnPacket
+            {
+                EntityId = entityId,
+                ItemId = itemId,
+                Count = count,
+                Position = position,
+                Velocity = velocity,
+            }), DeliveryMethod.ReliableOrdered);
+    }
+
     // -------------------------------------------------------------------------
     // Chunk streaming
     // -------------------------------------------------------------------------
@@ -332,28 +396,29 @@ public sealed class GameServer : IDisposable
 
         for (int dz = -streamRadius; dz <= streamRadius; dz++)
             for (int dx = -streamRadius; dx <= streamRadius; dx++)
-            {
-                var key = new Vector2i(center.X + dx, center.Y + dz);
-                if (cp.SentChunks.Contains(key)) continue;
-
-                // Ensure the chunk is loaded server-side.
-                if (!_world.Chunks.TryGetValue(key, out Chunk? chunk))
+                for (int cy = 0; cy < World.MaxChunkY; cy++)
                 {
-                    _world.Update(cp.Position, out _, out _);
-                    if (!_world.Chunks.TryGetValue(key, out chunk)) continue;
+                    var key = new Vector3i(center.X + dx, cy, center.Y + dz);
+                    if (cp.SentChunks.Contains(key)) continue;
+
+                    // Ensure the chunk is loaded server-side.
+                    if (!_world.Chunks.TryGetValue(key, out Chunk? chunk))
+                    {
+                        _world.Update(cp.Position, out _, out _);
+                        if (!_world.Chunks.TryGetValue(key, out chunk)) continue;
+                    }
+
+                    // Encode and send.
+                    var data = PacketSerializer.EncodeChunkBlocks(chunk);
+                    _writer.Reset();
+                    PacketSerializer.Serialize(_writer, new ChunkDataPacket
+                    {
+                        ChunkCoord = key,
+                        BlockData = data,
+                    });
+                    cp.Peer.Send(_writer, DeliveryMethod.ReliableOrdered);
+                    cp.SentChunks.Add(key);
                 }
-
-                // Encode and send.
-                var data = PacketSerializer.EncodeChunkBlocks(chunk);
-                _writer.Reset();
-                PacketSerializer.Serialize(_writer, new ChunkDataPacket
-                {
-                    ChunkCoord = key,
-                    BlockData = data,
-                });
-                cp.Peer.Send(_writer, DeliveryMethod.ReliableOrdered);
-                cp.SentChunks.Add(key);
-            }
     }
 
     // -------------------------------------------------------------------------

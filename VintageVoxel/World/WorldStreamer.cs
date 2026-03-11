@@ -58,23 +58,26 @@ public sealed class WorldStreamer
         }
         Profiler.End("Chunk Stream: Disk Load");
 
-        // Compute lighting for the new chunks (BFS needs neighbours already present).
+        // Compute lighting for the new chunks top-to-bottom: upper layers must be lit
+        // before lower layers so the sky-open column check in seeding works correctly.
         Profiler.Begin("Chunk Stream: Lighting");
-        foreach (var key in added)
+        foreach (var key in added.OrderByDescending(k => k.Y))
         {
             if (_world.Chunks.TryGetValue(key, out var newChunk))
                 LightEngine.ComputeChunk(newChunk, _world);
         }
         Profiler.End("Chunk Stream: Lighting");
 
-        // Include the four cardinal neighbours so their boundary faces get re-culled.
-        var toRebuild = new HashSet<Vector2i>(added);
+        // Include all six face-adjacent neighbours so their boundary faces get re-culled.
+        var toRebuild = new HashSet<Vector3i>(added);
         foreach (var key in added)
         {
-            toRebuild.Add(new Vector2i(key.X - 1, key.Y));
-            toRebuild.Add(new Vector2i(key.X + 1, key.Y));
-            toRebuild.Add(new Vector2i(key.X, key.Y - 1));
-            toRebuild.Add(new Vector2i(key.X, key.Y + 1));
+            toRebuild.Add(new Vector3i(key.X - 1, key.Y, key.Z));
+            toRebuild.Add(new Vector3i(key.X + 1, key.Y, key.Z));
+            toRebuild.Add(new Vector3i(key.X, key.Y - 1, key.Z));
+            toRebuild.Add(new Vector3i(key.X, key.Y + 1, key.Z));
+            toRebuild.Add(new Vector3i(key.X, key.Y, key.Z - 1));
+            toRebuild.Add(new Vector3i(key.X, key.Y, key.Z + 1));
         }
 
         Profiler.Begin("Chunk Stream: Mesh Upload");

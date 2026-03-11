@@ -149,6 +149,9 @@ public class Chunk
     {
         if (WorldGenConfig.FlatWorld) { GenerateFlat(); return; }
 
+        // Only the Y=0 chunk layer contains terrain; higher layers start as all-air.
+        if (Position.Y != 0) return;
+
         // Pre-compute heightmap and biome map for all 32×32 columns.
         var surfaceMap = new int[Size * Size];
         var biomeMap = new int[Size * Size];

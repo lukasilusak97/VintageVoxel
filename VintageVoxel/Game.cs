@@ -195,8 +195,11 @@ public class Game : GameWindow
             if (_entityItems[i].PickupCooldown <= 0f &&
                 (_camera.FeetPosition - _entityItems[i].Position).Length < EntityItem.PickupRadius)
             {
-                _player.Inventory.AddItem(_entityItems[i].Item, _entityItems[i].Count);
+                var entity = _entityItems[i];
+                _player.Inventory.AddItem(entity.Item, entity.Count);
                 _entityItems.RemoveAt(i);
+                if (entity.NetworkId >= 0)
+                    _gameClient?.SendPickupEntity(entity.NetworkId);
             }
         }
         Profiler.End("Entities");
@@ -1035,7 +1038,7 @@ public class Game : GameWindow
 
         _gameClient.OnChunkData += pkt =>
         {
-            var chunk = Chunk.CreateForDeserialization(new Vector3i(pkt.ChunkCoord.X, 0, pkt.ChunkCoord.Y));
+            var chunk = Chunk.CreateForDeserialization(new Vector3i(pkt.ChunkCoord.X, pkt.ChunkCoord.Y, pkt.ChunkCoord.Z));
             PacketSerializer.DecodeChunkBlocks(pkt.BlockData, chunk);
             LightEngine.ComputeChunk(chunk, _world);
             _world.ReplaceChunk(pkt.ChunkCoord, chunk);
@@ -1073,6 +1076,29 @@ public class Game : GameWindow
 
         _gameClient.OnChatMessage += pkt =>
             _chatWindow.AddMessage(pkt.Name, pkt.Message);
+
+        _gameClient.OnEntityItemSpawn += pkt =>
+        {
+            var item = ItemRegistry.Get(pkt.ItemId);
+            if (item == null) return;
+            var entity = new EntityItem(item, pkt.Count, pkt.Position, pkt.Velocity)
+            {
+                NetworkId = pkt.EntityId,
+            };
+            _entityItems.Add(entity);
+        };
+
+        _gameClient.OnEntityItemRemove += pkt =>
+        {
+            for (int i = _entityItems.Count - 1; i >= 0; i--)
+            {
+                if (_entityItems[i].NetworkId == pkt.EntityId)
+                {
+                    _entityItems.RemoveAt(i);
+                    break;
+                }
+            }
+        };
 
         _gameClient.OnDisconnected += reason =>
         {

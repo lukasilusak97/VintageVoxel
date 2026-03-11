@@ -43,7 +43,7 @@ public sealed class ChunkBorderRenderer : IDisposable
     /// Rebuilds the line VBO from the given chunk keys.
     /// Call whenever <see cref="World.Chunks"/> changes.
     /// </summary>
-    public void UpdateGeometry(IEnumerable<Vector2i> chunkKeys)
+    public void UpdateGeometry(IEnumerable<Vector3i> chunkKeys)
     {
         // 12 edges × 2 endpoints = 24 vertices per chunk; each vertex = 3 floats.
         var verts = new List<float>();
@@ -51,11 +51,11 @@ public sealed class ChunkBorderRenderer : IDisposable
         foreach (var key in chunkKeys)
         {
             float x0 = key.X * Chunk.Size;
-            float z0 = key.Y * Chunk.Size;
+            float y0 = key.Y * Chunk.Size;
+            float z0 = key.Z * Chunk.Size;
             float x1 = x0 + Chunk.Size;
+            float y1 = y0 + Chunk.Size;
             float z1 = z0 + Chunk.Size;
-            const float y0 = 0f;
-            const float y1 = Chunk.Size;
 
             // Bottom face (y = 0)
             Emit(verts, x0, y0, z0, x1, y0, z0);

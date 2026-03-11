@@ -87,7 +87,7 @@ public static class PacketSerializer
 
     public static ChunkDataPacket DeserializeChunkData(NetDataReader r)
     {
-        var coord = ReadV2i(r);
+        var coord = ReadV3i(r);
         int len = r.GetInt();
         var data = new byte[len];
         r.GetBytes(data, len);
@@ -230,6 +230,78 @@ public static class PacketSerializer
 
     public static ChatSendPacket DeserializeChatSend(NetDataReader r)
         => new() { Message = r.GetString() };
+
+    // ------------------------------------------------------------------
+    // EntityItemSpawnPacket  (server → clients)
+    // ------------------------------------------------------------------
+
+    public static void Serialize(NetDataWriter w, EntityItemSpawnPacket p)
+    {
+        w.Put((byte)PacketType.EntityItemSpawn);
+        w.Put(p.EntityId);
+        w.Put(p.ItemId);
+        w.Put(p.Count);
+        Write(w, p.Position);
+        Write(w, p.Velocity);
+    }
+
+    public static EntityItemSpawnPacket DeserializeEntityItemSpawn(NetDataReader r)
+        => new()
+        {
+            EntityId = r.GetInt(),
+            ItemId = r.GetInt(),
+            Count = r.GetInt(),
+            Position = ReadV3(r),
+            Velocity = ReadV3(r),
+        };
+
+    // ------------------------------------------------------------------
+    // EntityItemRemovePacket  (server → clients)
+    // ------------------------------------------------------------------
+
+    public static void Serialize(NetDataWriter w, EntityItemRemovePacket p)
+    {
+        w.Put((byte)PacketType.EntityItemRemove);
+        w.Put(p.EntityId);
+    }
+
+    public static EntityItemRemovePacket DeserializeEntityItemRemove(NetDataReader r)
+        => new() { EntityId = r.GetInt() };
+
+    // ------------------------------------------------------------------
+    // DropItemPacket  (client → server)
+    // ------------------------------------------------------------------
+
+    public static void Serialize(NetDataWriter w, DropItemPacket p)
+    {
+        w.Put((byte)PacketType.DropItem);
+        w.Put(p.ItemId);
+        w.Put(p.Count);
+        Write(w, p.Position);
+        Write(w, p.Velocity);
+    }
+
+    public static DropItemPacket DeserializeDropItem(NetDataReader r)
+        => new()
+        {
+            ItemId = r.GetInt(),
+            Count = r.GetInt(),
+            Position = ReadV3(r),
+            Velocity = ReadV3(r),
+        };
+
+    // ------------------------------------------------------------------
+    // PickupEntityPacket  (client → server)
+    // ------------------------------------------------------------------
+
+    public static void Serialize(NetDataWriter w, PickupEntityPacket p)
+    {
+        w.Put((byte)PacketType.PickupEntity);
+        w.Put(p.EntityId);
+    }
+
+    public static PickupEntityPacket DeserializePickupEntity(NetDataReader r)
+        => new() { EntityId = r.GetInt() };
 
     // ------------------------------------------------------------------
     // Chunk data helpers (encode/decode block array to byte[])

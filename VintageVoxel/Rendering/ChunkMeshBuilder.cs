@@ -290,8 +290,9 @@ public static class ChunkMeshBuilder
         else if (world != null)
         {
             int wx = chunk.Position.X * Chunk.Size + lx;
+            int wy = chunk.Position.Y * Chunk.Size + ly;
             int wz = chunk.Position.Z * Chunk.Size + lz;
-            return world.GetLight(wx, ly, wz);
+            return world.GetLight(wx, wy, wz);
         }
         // Default to full bright at chunk boundaries toward unloaded chunks.
         return 1.0f;
@@ -305,8 +306,9 @@ public static class ChunkMeshBuilder
         if (world != null)
         {
             int wx = chunk.Position.X * Chunk.Size + lx;
+            int wy = chunk.Position.Y * Chunk.Size + ly;
             int wz = chunk.Position.Z * Chunk.Size + lz;
-            return !world.GetBlock(wx, ly, wz).IsTransparent;
+            return !world.GetBlock(wx, wy, wz).IsTransparent;
         }
         return false;
     }
@@ -363,8 +365,9 @@ public static class ChunkMeshBuilder
                             else if (world != null)
                             {
                                 int wwx = chunk.Position.X * Chunk.Size + abx;
+                                int wwy = chunk.Position.Y * Chunk.Size + aby;
                                 int wwz = chunk.Position.Z * Chunk.Size + abz;
-                                exposed = world.GetBlock(wwx, aby, wwz).IsTransparent;
+                                exposed = world.GetBlock(wwx, wwy, wwz).IsTransparent;
                             }
                             else
                                 exposed = true;
