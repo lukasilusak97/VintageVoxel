@@ -129,7 +129,11 @@ void main()
     }
 
     vec4 tex = texture(uTexture, vTexCoord);
-    if (tex.a < 0.1) discard;
+    // Alpha cutout: discard pixels below 50 % opacity so anti-aliased leaf
+    // borders (alpha ~0.1-0.4) are invisible rather than blending sky colour
+    // into the leaf surface.  Non-discarded pixels are written as fully opaque
+    // so alpha-blending never picks up the sky clear-colour.
+    if (tex.a < 0.5) discard;
 
     // Modulate in approximate linear space.
     vec3 color = tex.rgb * lightColor;
@@ -142,5 +146,5 @@ void main()
     // Gamma encode (linear to sRGB approximate)
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
 
-    FragColor = vec4(color, tex.a);
+    FragColor = vec4(color, 1.0);
 }
