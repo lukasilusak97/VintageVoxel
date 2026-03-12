@@ -72,15 +72,24 @@ public class Chunk
     /// <summary>Returns the raw block ID at the given flat array index. Used by WorldPersistence.</summary>
     internal ushort GetRawBlockId(int flatIndex) => _blocks[flatIndex].Id;
 
+    /// <summary>Returns the raw block Shape at the given flat array index. Used by WorldPersistence.</summary>
+    internal byte GetRawBlockShape(int flatIndex) => _blocks[flatIndex].Shape;
+
     /// <summary>
-    /// Overwrites the entire block array from a saved ID list produced by
+    /// Overwrites the entire block array from a saved ID (and optional shape) list produced by
     /// <see cref="WorldPersistence"/>.  Transparency is resolved through the
     /// block registry so water, leaves, and other transparent blocks render correctly.
+    /// <paramref name="savedShapes"/> may be null for older saves (v2), which default to Shape=0.
     /// </summary>
-    internal void LoadBlocksFromSave(ushort[] savedIds)
+    internal void LoadBlocksFromSave(ushort[] savedIds, byte[]? savedShapes = null)
     {
         for (int i = 0; i < Volume; i++)
-            _blocks[i] = new Block { Id = savedIds[i], IsTransparent = BlockRegistry.IsTransparent(savedIds[i]) };
+            _blocks[i] = new Block
+            {
+                Id = savedIds[i],
+                IsTransparent = BlockRegistry.IsTransparent(savedIds[i]),
+                Shape = savedShapes != null ? savedShapes[i] : (byte)0,
+            };
     }
 
     // ------------------------------------------------------------------
@@ -89,6 +98,10 @@ public class Chunk
 
     /// <summary>Returns the block at local coordinates (x, y, z).</summary>
     public ref Block GetBlock(int x, int y, int z) => ref _blocks[Index(x, y, z)];
+
+    /// <summary>Sets the Shape field on the block at local coordinates.  Used by SlopePlacer.</summary>
+    public void SetShape(int x, int y, int z, SlopeShape shape)
+        => _blocks[Index(x, y, z)].Shape = (byte)shape;
 
     /// <summary>Returns true when (x, y, z) is within [0, Size).</summary>
     public static bool InBounds(int x, int y, int z) =>

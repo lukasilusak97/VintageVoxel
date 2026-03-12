@@ -68,6 +68,9 @@ public static class ChunkMeshBuilder
         (+1,  0,  0), // 5 East   (+X)
     };
 
+    // Opposite face index for each of the 6 faces (used for slope culling queries).
+    private static int OppositeFace(int face) => face ^ 1;
+
     /// <summary>
     /// Ambient-occlusion corner offsets for each face.
     ///
@@ -136,6 +139,10 @@ public static class ChunkMeshBuilder
         var verts = new List<float>(4096 * 32);
         var indices = new List<uint>(4096 * 6);
 
+        // Reusable buffers for per-face slope lighting (hoisted to avoid CA2014).
+        Span<float> slopeSun = stackalloc float[6];
+        Span<float> slopeBlk = stackalloc float[6];
+
         for (int z = 0; z < Chunk.Size; z++)
             for (int y = 0; y < Chunk.Size; y++)
                 for (int x = 0; x < Chunk.Size; x++)
@@ -152,6 +159,36 @@ public static class ChunkMeshBuilder
                         continue;
                     }
 
+                    // --- Slope blocks: emit their triangular prism geometry ---
+                    if (block.IsSlope)
+                    {
+                        var slopeShape = (SlopeShape)block.Shape;
+                        int tileIdx = BlockRegistry.TileForFace(block.Id, 0 /*top*/);
+                        float su0 = tileIdx * TextureAtlas.TileUvWidth;
+                        float su1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
+                        // For slopes at terrain surface, side-face neighbors are solid
+                        // terrain with sunLight = 0. Use the sky-light from above for all
+                        // faces and apply per-face directional scale for shading depth.
+                        // Block light (torches) is taken as the max across all 6 neighbors.
+                        GetLightAt(x, y + 1, z, chunk, world, out float skyLight, out _);
+                        float maxBlockLight = 0f;
+                        for (int face = 0; face < 6; face++)
+                        {
+                            var (fdx, fdy, fdz) = NeighbourOffsets[face];
+                            GetLightAt(x + fdx, y + fdy, z + fdz, chunk, world,
+                                out _, out float bv);
+                            if (bv > maxBlockLight) maxBlockLight = bv;
+                        }
+                        for (int face = 0; face < 6; face++)
+                        {
+                            slopeSun[face] = skyLight * FaceSunScale[face];
+                            slopeBlk[face] = maxBlockLight;
+                        }
+                        FaceEmitter.EmitSlopeFaces(verts, indices, slopeShape,
+                            x, y, z, su0, su1, slopeSun, slopeBlk, 1.0f);
+                        continue;
+                    }
+
                     for (int face = 0; face < 6; face++)
                     {
                         var (dx, dy, dz) = NeighbourOffsets[face];
@@ -161,7 +198,13 @@ public static class ChunkMeshBuilder
                         if (Chunk.InBounds(nx, ny, nz))
                         {
                             Block nb = chunk.GetBlock(nx, ny, nz);
-                            exposed = block.IsTransparent ? nb.Id == 0 : nb.IsTransparent;
+                            // A cube face is hidden when the neighbour fully covers it:
+                            // either a solid cube neighbour, or a slope whose matching
+                            // face is fully solid (flush with the boundary).
+                            bool neighbourCovers = nb.IsSlope
+                                ? SlopeGeometry.IsFaceSolid((SlopeShape)nb.Shape, OppositeFace(face))
+                                : !nb.IsTransparent;
+                            exposed = block.IsTransparent ? nb.Id == 0 : !neighbourCovers;
                         }
                         else if (world != null)
                         {
@@ -169,7 +212,10 @@ public static class ChunkMeshBuilder
                             int worldY = chunk.Position.Y * Chunk.Size + ny;
                             int worldZ = chunk.Position.Z * Chunk.Size + nz;
                             Block nb = world.GetBlock(worldX, worldY, worldZ);
-                            exposed = block.IsTransparent ? nb.Id == 0 : nb.IsTransparent;
+                            bool neighbourCovers = nb.IsSlope
+                                ? SlopeGeometry.IsFaceSolid((SlopeShape)nb.Shape, OppositeFace(face))
+                                : !nb.IsTransparent;
+                            exposed = block.IsTransparent ? nb.Id == 0 : !neighbourCovers;
                         }
                         else
                         {
@@ -402,13 +448,17 @@ public static class ChunkMeshBuilder
     private static bool IsSolid(int lx, int ly, int lz, Chunk chunk, World? world)
     {
         if (Chunk.InBounds(lx, ly, lz))
-            return !chunk.GetBlock(lx, ly, lz).IsTransparent;
+        {
+            Block b = chunk.GetBlock(lx, ly, lz);
+            return !b.IsTransparent && !b.IsSlope;
+        }
         if (world != null)
         {
             int wx = chunk.Position.X * Chunk.Size + lx;
             int wy = chunk.Position.Y * Chunk.Size + ly;
             int wz = chunk.Position.Z * Chunk.Size + lz;
-            return !world.GetBlock(wx, wy, wz).IsTransparent;
+            Block b = world.GetBlock(wx, wy, wz);
+            return !b.IsTransparent && !b.IsSlope;
         }
         return false;
     }

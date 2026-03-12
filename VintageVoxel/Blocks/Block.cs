@@ -28,9 +28,19 @@ public struct Block
     /// </summary>
     public const ushort ChiseledId = 999;
 
+    /// <summary>
+    /// Geometry shape of this block.  0 = full cube (default).  All non-zero
+    /// values map to <see cref="SlopeShape"/> — a diagonal ramp, outer corner,
+    /// or inner corner.  Shape is used by the mesher and the collision system.
+    /// </summary>
+    public byte Shape;
+
     /// <summary>Air — the absence of a block.</summary>
     public static readonly Block Air = new Block { Id = 0, IsTransparent = true };
 
     /// <summary>Convenience: returns true when this block occupies no space.</summary>
     public readonly bool IsEmpty => Id == 0;
+
+    /// <summary>Convenience: true when this block has non-cube slope geometry.</summary>
+    public readonly bool IsSlope => Shape != (byte)SlopeShape.Cube;
 }

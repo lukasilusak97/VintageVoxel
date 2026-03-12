@@ -8,6 +8,8 @@ namespace VintageVoxel.Rendering;
 /// Owns all chunk and model GPU resources and drives the 3-D render pass each frame.
 /// Responsibilities: chunk mesh uploads, placed-model tracking, frustum culling,
 /// entity rendering, hotbar 3-D preview, and the chunk-border debug overlay.
+/// Also manages a shadow-map depth pass so world geometry and entities cast
+/// directional shadows on the ground.
 /// </summary>
 public sealed class WorldRenderer : IDisposable
 {
@@ -21,10 +23,24 @@ public sealed class WorldRenderer : IDisposable
     private readonly GpuResourceManager _gpu;
     private readonly World _world;
     private readonly Shader _shader;
+    private readonly Shader _shadowShader;
     private readonly Texture _atlas;
     private readonly EntityItemRenderer _entityRenderer;
     private readonly Inventory _inventory;
     private readonly ChunkBorderRenderer _borders;
+
+    // ── Shadow map ────────────────────────────────────────────────────────────
+    private const int ShadowMapSize = 2048;
+
+    // Sun direction pointing FROM the ground TOWARD the sun (used to position the
+    // light camera above the scene).  The slight horizontal offset gives angled
+    // shadows that make depth easier to read.
+    private static readonly Vector3 SunDirection =
+        Vector3.Normalize(new Vector3(0.55f, 1.8f, 0.35f));
+
+    private int _shadowFbo;
+    private int _shadowDepthTex;
+    private Matrix4 _lightSpaceMatrix = Matrix4.Identity;
 
     // Reusable 1-element array for hotbar slot 3-D preview rendering.
     private readonly EntityItem[] _hudSlot = new EntityItem[1];
@@ -45,6 +61,76 @@ public sealed class WorldRenderer : IDisposable
         _entityRenderer = entityRenderer;
         _inventory = inventory;
         _borders = new ChunkBorderRenderer();
+        _shadowShader = new Shader("Shaders/shadow.vert", "Shaders/shadow.frag");
+        InitShadowMap();
+    }
+
+    // ── Shadow map setup ──────────────────────────────────────────────────────
+
+    private void InitShadowMap()
+    {
+        // Depth-only texture that will receive the scene depth from the light's POV.
+        _shadowDepthTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, _shadowDepthTex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.DepthComponent24,
+                      ShadowMapSize, ShadowMapSize, 0,
+                      PixelFormat.DepthComponent, PixelType.Float, IntPtr.Zero);
+        // Nearest filtering: we do manual PCF in the fragment shader.
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        // ClampToBorder with depth = 1.0: fragments outside the shadow frustum are lit.
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
+        GL.TexParameter(TextureTarget.Texture2D,
+            TextureParameterName.TextureBorderColor, new float[] { 1f, 1f, 1f, 1f });
+
+        // Framebuffer with only a depth attachment (no colour writes at all).
+        _shadowFbo = GL.GenFramebuffer();
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.DepthAttachment,
+                                TextureTarget.Texture2D, _shadowDepthTex, 0);
+        GL.DrawBuffer(DrawBufferMode.None);
+        GL.ReadBuffer(ReadBufferMode.None);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
+    private Matrix4 ComputeLightSpaceMatrix(Vector3 cameraPos)
+    {
+        // Position the light camera high above the scene in the sun's direction.
+        Vector3 lightPos = cameraPos + SunDirection * 160f;
+
+        // Choose an "up" vector that is never parallel to SunDirection.
+        Vector3 up = MathF.Abs(Vector3.Dot(SunDirection, Vector3.UnitX)) < 0.9f
+                     ? Vector3.UnitX : Vector3.UnitZ;
+
+        Matrix4 lightView = Matrix4.LookAt(lightPos, cameraPos, up);
+
+        // Orthographic projection large enough to cover the loaded render area.
+        float halfExt = World.RenderDistance * Chunk.Size + 16f;
+        Matrix4 lightProj = Matrix4.CreateOrthographic(
+            halfExt * 2f, halfExt * 2f, 1f, 450f);
+
+        // OpenTK row-major: view * proj = proj_glsl * view_glsl in column-major GLSL.
+        Matrix4 combined = lightView * lightProj;
+
+        // Texel snapping: align the projection origin to whole shadow-map texels.
+        // Without this, the shadow map shifts by a sub-texel amount every frame as
+        // the camera moves, causing visible flickering/swimming at shadow edges.
+        //
+        // In OpenTK row-major storage: combined.M41 / M42 are m[3][0] / m[3][1] in
+        // GLSL column-major terms, i.e. the X and Y NDC translation of the world
+        // origin (0,0,0,1) through this matrix.
+        float halfRes = ShadowMapSize * 0.5f;
+        combined.M41 += (MathF.Round(combined.M41 * halfRes) - combined.M41 * halfRes) / halfRes;
+        combined.M42 += (MathF.Round(combined.M42 * halfRes) - combined.M42 * halfRes) / halfRes;
+
+        return combined;
     }
 
     // -------------------------------------------------------------------------
@@ -191,9 +277,88 @@ public sealed class WorldRenderer : IDisposable
         return entry;
     }
 
-    // -------------------------------------------------------------------------
-    // Rendering
-    // -------------------------------------------------------------------------
+    // ── Shadow pass ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders the scene into the depth-only shadow-map FBO from the directional
+    /// light's perspective.  Both chunk meshes and entity items are included so
+    /// all objects cast shadows on the ground.
+    /// </summary>
+    private void RenderShadowPass(IReadOnlyList<EntityItem> entityItems)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+        GL.Viewport(0, 0, ShadowMapSize, ShadowMapSize);
+        GL.Clear(ClearBufferMask.DepthBufferBit);
+
+        // Polygon offset pushes stored depth slightly farther to avoid self-shadowing acne.
+        GL.Enable(EnableCap.PolygonOffsetFill);
+        GL.PolygonOffset(2f, 4f);
+        GL.Enable(EnableCap.DepthTest);
+
+        _shadowShader.Use();
+        _shadowShader.SetMatrix4("lightSpaceMatrix", ref _lightSpaceMatrix);
+
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
+        _shadowShader.SetInt("uTexture", 0);
+
+        // --- Chunks: rendered WITHOUT alpha-test so the shadow map has no holes.
+        // Alpha-tested (leaf) geometry with per-texel holes causes the Poisson PCF
+        // to sample through those holes (stored depth = 1.0 = sky) and report
+        // "fully lit" for leaf faces that should be in canopy shadow.
+        // Solid leaf-block silhouettes on the shadow map fix this completely.
+        _shadowShader.SetInt("uAlphaTest", 0);
+        foreach (var (key, gpu) in _chunkGpuData)
+        {
+            if (gpu.IndexCount == 0) continue;
+            var model = Matrix4.CreateTranslation(
+                key.X * Chunk.Size, key.Y * Chunk.Size, key.Z * Chunk.Size);
+            _shadowShader.SetMatrix4("model", ref model);
+            GL.BindVertexArray(gpu.Vao);
+            GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount,
+                            DrawElementsType.UnsignedInt, 0);
+        }
+
+        // --- Floating entity items (dropped picks, etc.) ---
+        if (entityItems.Count > 0)
+            _entityRenderer.Render(entityItems, _shadowShader, _atlas.Handle);
+
+        // --- Stationary placed models ---
+        // Each model may use its own texture; switch alpha-test on/off accordingly.
+        foreach (var (blockPos, entity) in _placedModels)
+        {
+            var item = entity.Item;
+            if (item.Mesh is null) continue;
+            ModelGpu mg = GetOrCreateModelGpu(item);
+
+            if (mg.TexHandle != 0)
+            {
+                GL.BindTexture(TextureTarget.Texture2D, mg.TexHandle);
+                _shadowShader.SetInt("uAlphaTest", 1);
+            }
+            else
+            {
+                GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
+                _shadowShader.SetInt("uAlphaTest", 0);
+            }
+
+            var model = Matrix4.CreateScale(1f / 16f) *
+                        Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
+            _shadowShader.SetMatrix4("model", ref model);
+            GL.BindVertexArray(mg.Mesh.Vao);
+            GL.DrawElements(PrimitiveType.Triangles, mg.Mesh.IndexCount,
+                            DrawElementsType.UnsignedInt, 0);
+        }
+
+        // Restore atlas on unit 0 for subsequent passes.
+        GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
+
+        GL.BindVertexArray(0);
+        GL.Disable(EnableCap.PolygonOffsetFill);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    // ── Main render pass ──────────────────────────────────────────────────────
 
     /// <summary>
     /// Executes the full 3-D render pass for one frame: chunks, entities, placed models,
@@ -202,6 +367,14 @@ public sealed class WorldRenderer : IDisposable
     public void Render(Camera camera, IReadOnlyList<EntityItem> entityItems,
                        DebugState debug, bool gameIsPlaying, int fbWidth, int fbHeight)
     {
+        // ── 1. Shadow pass ────────────────────────────────────────────────────
+        _lightSpaceMatrix = ComputeLightSpaceMatrix(camera.Position);
+        RenderShadowPass(entityItems);
+
+        // Restore the main framebuffer and viewport after the shadow pass.
+        GL.Viewport(0, 0, fbWidth, fbHeight);
+
+        // ── 2. Main scene pass ────────────────────────────────────────────────
         if (debug.WireframeMode)
             GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
 
@@ -210,6 +383,13 @@ public sealed class WorldRenderer : IDisposable
         _shader.SetInt("uTexture", 0);
         int noTexMode = debug.LightingDebug ? 2 : (debug.NoTextures ? 1 : 0);
         _shader.SetInt("uNoTexture", noTexMode);
+
+        // Bind shadow depth texture to unit 1.
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, _shadowDepthTex);
+        _shader.SetInt("uShadowMap", 1);
+        _shader.SetMatrix4("lightSpaceMatrix", ref _lightSpaceMatrix);
+        GL.ActiveTexture(TextureUnit.Texture0); // restore default active unit
 
         // Atmospheric fog: start at 60% of render distance, fully opaque at 95%.
         float renderDist = World.RenderDistance * Chunk.Size;
@@ -461,5 +641,8 @@ public sealed class WorldRenderer : IDisposable
         _modelGpu.Clear();
 
         _borders.Dispose();
+        _shadowShader.Dispose();
+        GL.DeleteFramebuffer(_shadowFbo);
+        GL.DeleteTexture(_shadowDepthTex);
     }
 }

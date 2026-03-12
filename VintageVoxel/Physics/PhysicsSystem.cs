@@ -85,7 +85,20 @@ public static class PhysicsSystem
         // Y axis
         float dy = camera.Velocity.Y * dt;
         camera.Position.Y += dy;
-        if (CollisionSystem.IsCollidingAt(world, camera.Position)) { camera.Position.Y -= dy; camera.Velocity.Y = 0f; }
+        if (CollisionSystem.IsCollidingAt(world, camera.Position))
+        {
+            camera.Position.Y -= dy;
+            camera.Velocity.Y = 0f;
+
+            // Slope surface snapping: if the player is standing on a slope block,
+            // push their Y up to the exact surface height so they ride smoothly
+            // instead of bouncing on the stair-step of the voxel grid.
+            float surfaceY = CollisionSystem.GetSurfaceHeightAt(
+                camera.Position.X, camera.Position.Z, world);
+            float targetEyeY = surfaceY + GameConstants.Physics.EyeHeight;
+            if (targetEyeY > camera.Position.Y && targetEyeY <= camera.Position.Y + 1.1f)
+                camera.Position.Y = targetEyeY;
+        }
 
         // Z axis
         float dz = camera.Velocity.Z * dt;

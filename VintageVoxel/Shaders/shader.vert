@@ -22,21 +22,25 @@ layout(location = 4) in float aAo;         // ambient occlusion [0.4,1]
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
+uniform mat4 lightSpaceMatrix; // combined light projection * view for shadow mapping
 
 out vec2  vTexCoord;
 out float vSunLight;
 out float vBlockLight;
 out float vAo;
-out float vViewDist;   // eye-space depth for atmospheric fog
+out float vViewDist;    // eye-space depth for atmospheric fog
+out vec4  vShadowCoord; // fragment position in light clip-space
 
 void main()
 {
-    vec4 viewPos  = view * model * vec4(aPosition, 1.0);
+    vec4 worldPos = model * vec4(aPosition, 1.0);
+    vec4 viewPos  = view * worldPos;
     gl_Position   = projection * viewPos;
 
-    vTexCoord   = aTexCoord;
-    vSunLight   = aSunLight;
-    vBlockLight = aBlockLight;
-    vAo         = aAo;
-    vViewDist   = -viewPos.z;  // positive depth in view space
+    vTexCoord    = aTexCoord;
+    vSunLight    = aSunLight;
+    vBlockLight  = aBlockLight;
+    vAo          = aAo;
+    vViewDist    = -viewPos.z;  // positive depth in view space
+    vShadowCoord = lightSpaceMatrix * worldPos;
 }

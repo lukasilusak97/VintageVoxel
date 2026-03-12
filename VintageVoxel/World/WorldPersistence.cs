@@ -37,7 +37,7 @@ namespace VintageVoxel;
 public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
-    private const byte Version = 2;
+    private const byte Version = 3;  // v3 adds per-block Shape byte array after block-ID RLE
     private const int SubVolume = ChiseledBlockData.SubSize * ChiseledBlockData.SubSize * ChiseledBlockData.SubSize; // 4096
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
@@ -186,9 +186,11 @@ public static class WorldPersistence
         bw.Write(key.Y);        // chunk Y (vertical layer)
         bw.Write(key.Z);        // chunk Z
 
-        // --- Block RLE ---
-        // Collect (id, runLength) pairs over the entire flat block array.
+        // --- Block RLE (IDs) ---
         WriteBlockRle(bw, chunk);
+
+        // --- Shape RLE (v3+) ---
+        WriteShapeRle(bw, chunk);
 
         // --- Chiseled block data ---
         bw.Write(chunk.ChiseledBlocks.Count);
@@ -229,9 +231,9 @@ public static class WorldPersistence
             byte[] magic = br.ReadBytes(4);
             if (!magic.AsSpan().SequenceEqual(Magic.AsSpan())) return false;
 
-            // Validate version.
+            // Validate version — accept v2 (no Shape data) and v3 (with Shape data).
             byte version = br.ReadByte();
-            if (version != Version) return false;
+            if (version != Version && version != 2) return false;
 
             int cx = br.ReadInt32();
             int cy = br.ReadInt32();
@@ -244,7 +246,11 @@ public static class WorldPersistence
 
             // Decode block RLE into the chunk's internal array.
             ushort[] blockIds = ReadBlockRle(br);
-            chunk.LoadBlocksFromSave(blockIds);
+
+            // v3+: decode Shape RLE; v2 saves have no shape data (all cubes).
+            byte[]? shapes = (version >= 3) ? ReadShapeRle(br) : null;
+
+            chunk.LoadBlocksFromSave(blockIds, shapes);
 
             // Decode any chiseled block data.
             int chiseledCount = br.ReadInt32();
@@ -271,6 +277,44 @@ public static class WorldPersistence
     // -------------------------------------------------------------------------
     // RLE helpers — blocks
     // -------------------------------------------------------------------------
+
+    private static void WriteShapeRle(BinaryWriter bw, Chunk chunk)
+    {
+        var runs = new List<(byte shape, ushort count)>(32);
+        int i = 0;
+        while (i < Chunk.Volume)
+        {
+            byte shape = chunk.GetRawBlockShape(i);
+            int run = 1;
+            while (i + run < Chunk.Volume &&
+                   chunk.GetRawBlockShape(i + run) == shape &&
+                   run < ushort.MaxValue)
+                run++;
+            runs.Add((shape, (ushort)run));
+            i += run;
+        }
+        bw.Write(runs.Count);
+        foreach (var (shape, count) in runs)
+        {
+            bw.Write(shape);
+            bw.Write(count);
+        }
+    }
+
+    private static byte[] ReadShapeRle(BinaryReader br)
+    {
+        int entryCount = br.ReadInt32();
+        var shapes = new byte[Chunk.Volume];
+        int pos = 0;
+        for (int e = 0; e < entryCount; e++)
+        {
+            byte shape = br.ReadByte();
+            ushort count = br.ReadUInt16();
+            for (int j = 0; j < count && pos < Chunk.Volume; j++)
+                shapes[pos++] = shape;
+        }
+        return shapes;
+    }
 
     private static void WriteBlockRle(BinaryWriter bw, Chunk chunk)
     {
