@@ -31,6 +31,7 @@ public sealed class Vehicle : IDisposable
 
     // Rendering
     private readonly VehicleRenderer _renderer;
+    private readonly VehicleSetup? _setup;
 
     /// <summary>True while the player is driving.</summary>
     public bool IsOccupied { get; private set; }
@@ -74,9 +75,14 @@ public sealed class Vehicle : IDisposable
         return copy;
     }
 
-    public Vehicle(World world, Vector3 spawnPosition, VehicleRenderer renderer)
+    public Vehicle(World world, Vector3 spawnPosition, VehicleRenderer renderer, VehicleSetup? setup = null)
     {
         _renderer = renderer;
+        _setup = setup;
+        var s = setup ?? new VehicleSetup();
+
+        InteractRadius = s.InteractRadius;
+        CameraOffset = new Vector3(s.CameraOffset.X, s.CameraOffset.Y, s.CameraOffset.Z);
 
         _bufferPool = new BufferPool();
         _simulation = Simulation.Create(
@@ -85,10 +91,30 @@ public sealed class Vehicle : IDisposable
             new PoseIntegratorCallbacks(new Vector3(0, -9.81f, 0)),
             new SolveDescription(4, 1));
 
+        // Convert wheel positions from setup JSON to System.Numerics.Vector3 array.
+        Vector3[]? wheelOffsets = null;
+        if (s.Wheels is { Length: > 0 })
+        {
+            wheelOffsets = new Vector3[s.Wheels.Length];
+            for (int i = 0; i < s.Wheels.Length; i++)
+                wheelOffsets[i] = new Vector3(s.Wheels[i].X, s.Wheels[i].Y, s.Wheels[i].Z);
+        }
+
         _query = new VoxelPhysicsQuery(world);
-        _chassis = new VehicleChassis(_simulation, spawnPosition);
-        _suspension = new RaycastSuspension(_chassis, _query);
+        _chassis = new VehicleChassis(_simulation, spawnPosition,
+            s.Chassis.Mass, s.Chassis.Width, s.Chassis.Height, s.Chassis.Length);
+        _suspension = new RaycastSuspension(_chassis, _query, wheelOffsets);
+        _suspension.SuspensionLength = s.Suspension.SuspensionLength;
+        _suspension.RestLength = s.Suspension.RestLength;
+        _suspension.SpringStiffness = s.Suspension.SpringStiffness;
+        _suspension.Damping = s.Suspension.Damping;
+        _suspension.RightingTorque = s.Suspension.RightingTorque;
+        _suspension.MinGroundClearance = s.Suspension.MinGroundClearance;
         _controller = new VehicleController(_chassis, _suspension);
+        _controller.DriveForce = s.Controller.DriveForce;
+        _controller.BrakeForce = s.Controller.BrakeForce;
+        _controller.SteerTorque = s.Controller.SteerTorque;
+        _controller.LateralGrip = s.Controller.LateralGrip;
     }
 
     /// <summary>
@@ -155,7 +181,7 @@ public sealed class Vehicle : IDisposable
     /// <summary>Draws the vehicle model.</summary>
     public void Render(Camera camera)
     {
-        _renderer.Render(Position, Orientation, camera);
+        _renderer.Render(Position, Orientation, camera, _setup, GetWheelOffsetsWorld());
     }
 
     public void Dispose()

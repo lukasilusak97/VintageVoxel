@@ -4,24 +4,22 @@ using OpenTK.Mathematics;
 namespace VintageVoxel.Rendering;
 
 /// <summary>
-/// Renders a simple procedural vehicle model made of coloured box parts,
-/// using the same technique as <see cref="RemotePlayerRenderer"/>:
-/// a unit cube scaled/translated/rotated per part via model matrix uniforms.
+/// Renders vehicle models using either loaded Minecraft-format JSON meshes
+/// (body + per-wheel) or a fallback procedural box-based vehicle.
 ///
-/// Parts (origin = vehicle centre, Y-up):
-///   Chassis body  — 2×0.5×4   dark grey
-///   Roof/cabin    — 1.4×0.6×1.8 blue-grey, centred above rear half
-///   4 wheels      — 0.3×0.3×0.3 black cubes at the corners
+/// The shader, unit-cube VAO, and fallback parts are shared across all vehicles.
+/// Per-vehicle-type meshes are uploaded on first use and cached by model path.
 /// </summary>
 public sealed class VehicleRenderer : IDisposable
 {
+    // ─── Fallback procedural parts ────────────────────────────────────────
     private readonly record struct Part(
         Vector3 Offset,    // local centre offset from vehicle origin
         Vector3 HalfSize,  // half-extents
         Vector3 Color      // RGB [0,1]
     );
 
-    private static readonly Part[] Parts =
+    private static readonly Part[] FallbackParts =
     {
         // Main body
         new(new Vector3(0f, 0f, 0f), new Vector3(1.0f, 0.25f, 2.0f), new Vector3(0.35f, 0.35f, 0.38f)),
@@ -51,6 +49,21 @@ public sealed class VehicleRenderer : IDisposable
         0,3,7, 7,4,0,   1,5,6, 6,2,1,
         3,2,6, 6,7,3,   0,4,5, 5,1,0,
     };
+
+    // ─── Cached model GPU data ────────────────────────────────────────────
+    private sealed class MeshGpu : IDisposable
+    {
+        public int Vao, Vbo, Ebo, IndexCount;
+
+        public void Dispose()
+        {
+            GL.DeleteVertexArray(Vao);
+            GL.DeleteBuffer(Vbo);
+            GL.DeleteBuffer(Ebo);
+        }
+    }
+
+    private readonly Dictionary<string, MeshGpu> _meshCache = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Shader _shader;
     private readonly int _vao, _vbo, _ebo;
@@ -86,11 +99,12 @@ public sealed class VehicleRenderer : IDisposable
 
     /// <summary>
     /// Draws the vehicle at the given world-space position and orientation.
+    /// When <paramref name="setup"/> is provided and its model paths resolve,
+    /// renders the JSON body + wheel meshes; otherwise falls back to procedural boxes.
     /// </summary>
-    /// <param name="position">World-space centre of the vehicle (System.Numerics).</param>
-    /// <param name="orientation">Vehicle orientation quaternion (System.Numerics).</param>
-    /// <param name="camera">Current camera for view/projection matrices.</param>
-    public void Render(System.Numerics.Vector3 position, System.Numerics.Quaternion orientation, Camera camera)
+    public void Render(System.Numerics.Vector3 position, System.Numerics.Quaternion orientation,
+                       Camera camera, VehicleSetup? setup = null,
+                       System.Numerics.Vector3[]? wheelOffsetsWorld = null)
     {
         GL.UseProgram(_shader.Handle);
 
@@ -99,25 +113,104 @@ public sealed class VehicleRenderer : IDisposable
         GL.UniformMatrix4(_uView, false, ref view);
         GL.UniformMatrix4(_uProjection, false, ref proj);
 
-        GL.BindVertexArray(_vao);
-
         // Convert Bepu pose to OpenTK for matrix math.
         var pos = Physics.MathConversions.ToOpenTK(position);
         var rot = Physics.MathConversions.ToOpenTK(orientation);
         var worldRot = Matrix4.CreateFromQuaternion(rot);
         var worldTrans = Matrix4.CreateTranslation(pos);
 
-        foreach (var part in Parts)
-        {
-            var scale = Matrix4.CreateScale(part.HalfSize);
-            var trans = Matrix4.CreateTranslation(part.Offset);
-            var model = scale * trans * worldRot * worldTrans;
+        MeshGpu? bodyGpu = setup?.BodyModel != null ? GetOrUpload(setup.BodyModel) : null;
+        MeshGpu? wheelGpu = setup?.WheelModel != null ? GetOrUpload(setup.WheelModel) : null;
 
+        if (bodyGpu != null)
+        {
+            // Render body model.
+            var model = worldRot * worldTrans;
             GL.UniformMatrix4(_uModel, false, ref model);
-            GL.Uniform3(_uColor, part.Color);
-            GL.DrawElements(PrimitiveType.Triangles, CubeIndices.Length, DrawElementsType.UnsignedInt, 0);
+            GL.Uniform3(_uColor, new Vector3(1f, 1f, 1f));
+            DrawMeshGpu(bodyGpu);
+
+            // Render wheel models at each wheel position.
+            if (wheelGpu != null && wheelOffsetsWorld != null)
+            {
+                foreach (var wpos in wheelOffsetsWorld)
+                {
+                    var wheelPos = Physics.MathConversions.ToOpenTK(wpos);
+                    var wheelModel = worldRot * Matrix4.CreateTranslation(wheelPos);
+                    GL.UniformMatrix4(_uModel, false, ref wheelModel);
+                    DrawMeshGpu(wheelGpu);
+                }
+            }
+        }
+        else
+        {
+            // Fallback: procedural box parts.
+            GL.BindVertexArray(_vao);
+            foreach (var part in FallbackParts)
+            {
+                var scale = Matrix4.CreateScale(part.HalfSize);
+                var trans = Matrix4.CreateTranslation(part.Offset);
+                var model = scale * trans * worldRot * worldTrans;
+
+                GL.UniformMatrix4(_uModel, false, ref model);
+                GL.Uniform3(_uColor, part.Color);
+                GL.DrawElements(PrimitiveType.Triangles, CubeIndices.Length, DrawElementsType.UnsignedInt, 0);
+            }
+            GL.BindVertexArray(0);
+        }
+    }
+
+    // ─── Mesh cache helpers ───────────────────────────────────────────────
+
+    private MeshGpu? GetOrUpload(string modelRelPath)
+    {
+        if (_meshCache.TryGetValue(modelRelPath, out var cached))
+            return cached;
+
+        string modelsDir = Path.Combine(AppContext.BaseDirectory, "Assets", "Models");
+        string filePath = Path.Combine(modelsDir, modelRelPath.ToLowerInvariant() + ".json");
+
+        if (!MinecraftModelLoader.TryLoad(filePath, out ModelMesh? mesh) || mesh == null)
+        {
+            _meshCache[modelRelPath] = null!;
+            return null;
         }
 
+        var gpu = UploadMesh(mesh);
+        _meshCache[modelRelPath] = gpu;
+        return gpu;
+    }
+
+    private static MeshGpu UploadMesh(ModelMesh mesh)
+    {
+        var gpu = new MeshGpu { IndexCount = mesh.Indices.Length };
+
+        gpu.Vao = GL.GenVertexArray();
+        GL.BindVertexArray(gpu.Vao);
+
+        gpu.Vbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.Vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, mesh.Vertices.Length * sizeof(float),
+                      mesh.Vertices, BufferUsageHint.StaticDraw);
+
+        gpu.Ebo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, gpu.Ebo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, mesh.Indices.Length * sizeof(uint),
+                      mesh.Indices, BufferUsageHint.StaticDraw);
+
+        // Vertex layout: 7 floats [x,y,z, u,v, light, ao]
+        const int stride = 7 * sizeof(float);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+        GL.EnableVertexAttribArray(0);
+
+        GL.BindVertexArray(0);
+        return gpu;
+    }
+
+    private static void DrawMeshGpu(MeshGpu gpu)
+    {
+        GL.BindVertexArray(gpu.Vao);
+        GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount, DrawElementsType.UnsignedInt, 0);
         GL.BindVertexArray(0);
     }
 
@@ -127,5 +220,8 @@ public sealed class VehicleRenderer : IDisposable
         GL.DeleteBuffer(_vbo);
         GL.DeleteBuffer(_ebo);
         _shader.Dispose();
+        foreach (var gpu in _meshCache.Values)
+            gpu?.Dispose();
+        _meshCache.Clear();
     }
 }

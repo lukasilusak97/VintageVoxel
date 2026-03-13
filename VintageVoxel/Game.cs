@@ -51,6 +51,7 @@ public class Game : GameWindow
 
     private Player _player = new();
     private readonly InventoryWindow _inventoryWindow = new();
+    private readonly CreativeInventoryWindow _creativeWindow = new();
     private readonly List<(ItemStack Stack, float DispX, float DispY, float Size)> _hotbarRenderTargets = new();
     private readonly List<EntityItem> _entityItems = new();
     private EntityItemRenderer _entityRenderer = null!;
@@ -62,7 +63,7 @@ public class Game : GameWindow
     // ─── Vehicle ───────────────────────────────────────────────────────────
     private VehicleRenderer _vehicleRenderer = null!;
     private VehicleDebugRenderer _vehicleDebugRenderer = null!;
-    private Vehicle? _vehicle;
+    private readonly List<Vehicle> _vehicles = new();
 
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -140,6 +141,7 @@ public class Game : GameWindow
         _playerName = WorldPersistence.LoadPlayerName("Player");
 
         ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
+        EntityRegistry.Load(Path.Combine(assetsDir, "entities.json"));
 
         // Restore a saved player or give a fresh one a starter item.
         if (WorldPersistence.TryLoadPlayer(_savePath, out var loadedPlayer, out var loadedPos))
@@ -174,6 +176,7 @@ public class Game : GameWindow
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
+        _interaction.OnEntitySpawn = SpawnEntity;
     }
 
     protected override void OnUpdateFrame(FrameEventArgs args)
@@ -195,16 +198,21 @@ public class Game : GameWindow
             return;
 
         Profiler.Begin("Physics");
-        if (_vehicle is { IsOccupied: true })
+        var occupiedVehicle = _vehicles.Find(v => v.IsOccupied);
+        if (occupiedVehicle != null)
         {
-            _vehicle.Update(KeyboardState, dt);
-            _vehicle.UpdateCamera(_camera);
+            occupiedVehicle.Update(KeyboardState, dt);
+            occupiedVehicle.UpdateCamera(_camera);
+            // Still tick other vehicles so they don't freeze mid-air.
+            foreach (var v in _vehicles)
+                if (v != occupiedVehicle) v.Update(KeyboardState, dt);
         }
         else
         {
             PhysicsSystem.Update(_camera, _world, KeyboardState, dt);
-            // Still tick vehicle physics when not driving so it doesn't freeze mid-air.
-            _vehicle?.Update(KeyboardState, dt);
+            // Still tick vehicle physics when not driving so they don't freeze mid-air.
+            foreach (var v in _vehicles)
+                v.Update(KeyboardState, dt);
         }
         Profiler.End("Physics");
 
@@ -280,13 +288,15 @@ public class Game : GameWindow
                               _gameState == GameState.Playing,
                               FramebufferSize.X, FramebufferSize.Y);
 
-        // Render vehicle.
-        if (_gameState == GameState.Playing && _vehicle != null)
+        // Render vehicles.
+        if (_gameState == GameState.Playing && _vehicles.Count > 0)
         {
-            _vehicle.Render(_camera);
-
-            if (_debugState.ShowVehicleDebug)
-                _vehicleDebugRenderer.Render(_vehicle, _camera);
+            foreach (var v in _vehicles)
+            {
+                v.Render(_camera);
+                if (_debugState.ShowVehicleDebug)
+                    _vehicleDebugRenderer.Render(v, _camera);
+            }
         }
 
         // Render remote player box-man models (before ImGui so tags draw over them).
@@ -300,7 +310,11 @@ public class Game : GameWindow
         Profiler.End("HUD");
 
         if (_gameState == GameState.Playing)
+        {
             _inventoryWindow.Draw(_player.Inventory);
+            if (_inventoryWindow.IsOpen)
+                _creativeWindow.Draw(_inventoryWindow);
+        }
 
         if (_debugVisible && _gameState == GameState.Playing)
         {
@@ -346,6 +360,10 @@ public class Game : GameWindow
             if (_inventoryWindow.IsOpen && _inventoryWindow.SlotRenderTargets.Count > 0)
                 _worldRenderer.RenderInventoryItems3D(
                     _inventoryWindow.SlotRenderTargets, ds.X, ds.Y,
+                    FramebufferSize.X, FramebufferSize.Y);
+            if (_inventoryWindow.IsOpen && _creativeWindow.SlotRenderTargets.Count > 0)
+                _worldRenderer.RenderInventoryItems3D(
+                    _creativeWindow.SlotRenderTargets, ds.X, ds.Y,
                     FramebufferSize.X, FramebufferSize.Y);
         }
 
@@ -393,14 +411,14 @@ public class Game : GameWindow
         if (e.Key == Keys.E && _gameState == GameState.Playing)
         {
             // Try vehicle enter/leave first.
-            if (_vehicle != null)
+            foreach (var v in _vehicles)
             {
-                if (_vehicle.TryToggle(_camera.Position))
+                if (v.TryToggle(_camera.Position))
                 {
-                    if (!_vehicle.IsOccupied)
+                    if (!v.IsOccupied)
                     {
                         // Exiting: restore player position beside the vehicle.
-                        _camera.Position = _vehicle.GetExitPosition();
+                        _camera.Position = v.GetExitPosition();
                         _camera.Velocity = OpenTK.Mathematics.Vector3.Zero;
                     }
                     return;
@@ -414,13 +432,13 @@ public class Game : GameWindow
             return;
         }
 
-        // V key: spawn a vehicle at the player's position.
-        if (e.Key == Keys.V && _gameState == GameState.Playing && _vehicle == null)
+        // V key: spawn a debug vehicle at the player's position.
+        if (e.Key == Keys.V && _gameState == GameState.Playing)
         {
             // Spawn the vehicle 2m above the player's feet so it doesn't overlap ground statics.
             var feet = _camera.FeetPosition;
             var spawnPos = new SNVector3(feet.X, feet.Y + 2.0f, feet.Z);
-            _vehicle = new Vehicle(_world, spawnPos, _vehicleRenderer);
+            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer));
         }
 
         if (e.Key == Keys.F3 && _gameState == GameState.Playing)
@@ -496,7 +514,9 @@ public class Game : GameWindow
         WorldPersistence.SaveAll(_savePath, _world);
 
         GL.BindVertexArray(0);
-        _vehicle?.Dispose();
+        foreach (var v in _vehicles)
+            v.Dispose();
+        _vehicles.Clear();
         _vehicleRenderer?.Dispose();
         _vehicleDebugRenderer?.Dispose();
         _remotePlayerRenderer?.Dispose();
@@ -506,6 +526,27 @@ public class Game : GameWindow
         _entityRenderer.Dispose();
         _gpuResources.Dispose();
         _imgui.Dispose();
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity spawning
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Spawns an entity at the given world-space position. Called by
+    /// <see cref="InteractionHandler"/> when an entity item is placed.
+    /// </summary>
+    private void SpawnEntity(int entityId, OpenTK.Mathematics.Vector3 position)
+    {
+        var def = EntityRegistry.Get(entityId);
+        if (def == null) return;
+
+        if (string.Equals(def.Type, "vehicle", StringComparison.OrdinalIgnoreCase))
+        {
+            var setup = EntityRegistry.GetVehicleSetup(entityId);
+            var spawnPos = new SNVector3(position.X, position.Y, position.Z);
+            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer, setup));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -587,9 +628,13 @@ public class Game : GameWindow
         }
 
         _entityItems.Clear();
+        foreach (var v in _vehicles)
+            v.Dispose();
+        _vehicles.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
+        _interaction.OnEntitySpawn = SpawnEntity;
         _interaction.NetworkClient = null; // single-player: no networking
         _lastSaveStatus = null;
         TransitionToPlaying();
@@ -1220,9 +1265,13 @@ public class Game : GameWindow
                                            _entityRenderer, _player.Inventory);
 
         _entityItems.Clear();
+        foreach (var v in _vehicles)
+            v.Dispose();
+        _vehicles.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                                 _worldRenderer, _entityItems, _savePath);
+        _interaction.OnEntitySpawn = SpawnEntity;
         _interaction.NetworkClient = _gameClient;
         _lastSaveStatus = null;
         TransitionToPlaying();

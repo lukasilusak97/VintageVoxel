@@ -7,6 +7,8 @@ public enum ItemType
     Block,
     /// <summary>Uses a voxel JSON model for both in-world and inventory rendering.</summary>
     Model,
+    /// <summary>Spawns an entity (e.g. vehicle) when placed in the world.</summary>
+    Entity,
 }
 
 /// <summary>
@@ -30,7 +32,13 @@ public class Item
     /// </summary>
     public int BlockId { get; }
 
-    /// <summary>Whether this item is a placed block or a stand-alone model.</summary>
+    /// <summary>
+    /// The entity ID this item spawns when placed, or 0 for non-entity items.
+    /// Used to look up entity definitions via <see cref="EntityRegistry.Get"/>.
+    /// </summary>
+    public int EntityId { get; }
+
+    /// <summary>Whether this item is a placed block, a stand-alone model, or an entity spawner.</summary>
     public ItemType Type { get; }
 
     /// <summary>
@@ -48,7 +56,7 @@ public class Item
 
     public Item(int id, string name, int maxStackSize, int blockId = 0,
                 ItemType type = ItemType.Block, VoxelModel? model = null,
-                ModelMesh? mesh = null)
+                ModelMesh? mesh = null, int entityId = 0)
     {
         Id = id;
         Name = name;
@@ -57,5 +65,6 @@ public class Item
         Type = type;
         Model = model;
         Mesh = mesh;
+        EntityId = entityId;
     }
 }

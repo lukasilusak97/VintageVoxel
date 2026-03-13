@@ -14,5 +14,6 @@
     { "id": 13, "name": "Coal Ore", "maxStackSize": 64, "blockId": 13 },
     { "id": 14, "name": "Iron Ore", "maxStackSize": 64, "blockId": 14 },
     { "id": 15, "name": "Water", "maxStackSize": 64, "blockId": 15 },
-    { "id": 16, "name": "Snow", "maxStackSize": 64, "blockId": 16 }
+    { "id": 16, "name": "Snow", "maxStackSize": 64, "blockId": 16 },
+    { "id": 17, "name": "Buggie Vehicle", "maxStackSize": 1, "entityId": 1 }
 ]

@@ -1,0 +1,32 @@
+{
+    "bodyModel": "Entities/buggie_body",
+    "wheelModel": "Entities/buggie_wheel",
+    "chassis": {
+        "mass": 500,
+        "width": 2.0,
+        "height": 1.0,
+        "length": 4.0
+    },
+    "wheels": [
+        { "x": -1.05, "y": -0.25, "z": -1.6 },
+        { "x": 1.05, "y": -0.25, "z": -1.6 },
+        { "x": -1.05, "y": -0.25, "z": 1.6 },
+        { "x": 1.05, "y": -0.25, "z": 1.6 }
+    ],
+    "suspension": {
+        "suspensionLength": 1.0,
+        "restLength": 0.6,
+        "springStiffness": 5000,
+        "damping": 1000,
+        "rightingTorque": 800,
+        "minGroundClearance": 0.3
+    },
+    "controller": {
+        "driveForce": 1000,
+        "brakeForce": 4000,
+        "steerTorque": 1500,
+        "lateralGrip": 0.9
+    },
+    "interactRadius": 5.0,
+    "cameraOffset": { "x": 0.0, "y": 2.0, "z": 0.0 }
+}

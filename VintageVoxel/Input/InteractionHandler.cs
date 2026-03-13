@@ -28,6 +28,13 @@ public sealed class InteractionHandler
     /// </summary>
     public GameClient? NetworkClient { get; set; }
 
+    /// <summary>
+    /// Callback invoked when an entity item is placed. Receives the entity ID and
+    /// the world-space spawn position. The caller (Game) is responsible for
+    /// actually creating the entity (e.g. a Vehicle).
+    /// </summary>
+    public Action<int, Vector3>? OnEntitySpawn { get; set; }
+
     public InteractionHandler(World world, Camera camera, Inventory inventory,
                               WorldRenderer renderer, List<EntityItem> entityItems, string savePath)
     {
@@ -109,6 +116,15 @@ public sealed class InteractionHandler
         if (held.IsEmpty) return;
 
         var blockPos = new Vector3i(wx, wy, wz);
+
+        if (held.Item!.Type == ItemType.Entity)
+        {
+            var item = held.Item;
+            _inventory.RemoveItem(item, 1);
+            var spawnPos = new Vector3(wx + 0.5f, wy + 1.0f, wz + 0.5f);
+            OnEntitySpawn?.Invoke(item.EntityId, spawnPos);
+            return;
+        }
 
         if (held.Item!.Type == ItemType.Model)
         {

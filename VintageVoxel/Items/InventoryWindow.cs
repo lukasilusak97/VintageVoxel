@@ -21,6 +21,17 @@ public sealed class InventoryWindow
     // The item stack currently "held" on the mouse cursor during a drag.
     private ItemStack _cursorStack = ItemStack.Empty;
 
+    /// <summary>
+    /// The stack currently held on the mouse cursor.  Exposed so that external
+    /// panels (e.g. <see cref="CreativeInventoryWindow"/>) can share the same
+    /// drag-and-drop cursor as the inventory grid.
+    /// </summary>
+    public ItemStack CursorStack
+    {
+        get => _cursorStack;
+        set => _cursorStack = value;
+    }
+
     /// <summary>Whether the inventory window is currently visible.</summary>
     public bool IsOpen { get; set; }
 

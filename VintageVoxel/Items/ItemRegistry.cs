@@ -36,7 +36,11 @@ public static class ItemRegistry
             ModelMesh? mesh = null;
             ItemType itemType = ItemType.Block;
 
-            if (!string.IsNullOrEmpty(def.Model))
+            if (def.EntityId > 0)
+            {
+                itemType = ItemType.Entity;
+            }
+            else if (!string.IsNullOrEmpty(def.Model))
             {
                 itemType = ItemType.Model;
                 string modelPath = Path.Combine(modelsDir, def.Model.ToLowerInvariant() + ".json");
@@ -46,7 +50,7 @@ public static class ItemRegistry
             }
 
             _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.BlockId,
-                                      itemType, model, mesh);
+                                      itemType, model, mesh, def.EntityId);
         }
     }
 
@@ -64,5 +68,7 @@ public static class ItemRegistry
         public int BlockId { get; set; }
         /// <summary>Optional model path (relative to Assets/Models/, without extension).</summary>
         public string? Model { get; set; }
+        /// <summary>Entity ID to spawn when this item is placed (0 = not an entity item).</summary>
+        public int EntityId { get; set; }
     }
 }
