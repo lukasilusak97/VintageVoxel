@@ -8,6 +8,7 @@ using VintageVoxel.Networking;
 using VintageVoxel.Physics;
 using VintageVoxel.Rendering;
 using VintageVoxel.UI;
+using SNVector3 = System.Numerics.Vector3;
 
 namespace VintageVoxel;
 
@@ -57,6 +58,11 @@ public class Game : GameWindow
     private WorldRenderer _worldRenderer = null!;
     private WorldStreamer _worldStreamer = null!;
     private InteractionHandler _interaction = null!;
+
+    // ─── Vehicle ───────────────────────────────────────────────────────────
+    private VehicleRenderer _vehicleRenderer = null!;
+    private VehicleDebugRenderer _vehicleDebugRenderer = null!;
+    private Vehicle? _vehicle;
 
     private bool _firstMove = true;
     private Vector2 _lastMousePos;
@@ -162,6 +168,9 @@ public class Game : GameWindow
         foreach (var key in initial)
             if (_world.Chunks.TryGetValue(key, out var ic)) _worldRenderer.ScanChunkForPlacedModels(ic);
 
+        _vehicleRenderer = new VehicleRenderer();
+        _vehicleDebugRenderer = new VehicleDebugRenderer();
+
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _savePath);
@@ -186,7 +195,17 @@ public class Game : GameWindow
             return;
 
         Profiler.Begin("Physics");
-        PhysicsSystem.Update(_camera, _world, KeyboardState, dt);
+        if (_vehicle is { IsOccupied: true })
+        {
+            _vehicle.Update(KeyboardState, dt);
+            _vehicle.UpdateCamera(_camera);
+        }
+        else
+        {
+            PhysicsSystem.Update(_camera, _world, KeyboardState, dt);
+            // Still tick vehicle physics when not driving so it doesn't freeze mid-air.
+            _vehicle?.Update(KeyboardState, dt);
+        }
         Profiler.End("Physics");
 
         Profiler.Begin("Entities");
@@ -260,6 +279,15 @@ public class Game : GameWindow
         _worldRenderer.Render(_camera, _entityItems, _debugState,
                               _gameState == GameState.Playing,
                               FramebufferSize.X, FramebufferSize.Y);
+
+        // Render vehicle.
+        if (_gameState == GameState.Playing && _vehicle != null)
+        {
+            _vehicle.Render(_camera);
+
+            if (_debugState.ShowVehicleDebug)
+                _vehicleDebugRenderer.Render(_vehicle, _camera);
+        }
 
         // Render remote player box-man models (before ImGui so tags draw over them).
         if (_gameState == GameState.Playing && _remotePlayers.Count > 0)
@@ -364,11 +392,35 @@ public class Game : GameWindow
 
         if (e.Key == Keys.E && _gameState == GameState.Playing)
         {
+            // Try vehicle enter/leave first.
+            if (_vehicle != null)
+            {
+                if (_vehicle.TryToggle(_camera.Position))
+                {
+                    if (!_vehicle.IsOccupied)
+                    {
+                        // Exiting: restore player position beside the vehicle.
+                        _camera.Position = _vehicle.GetExitPosition();
+                        _camera.Velocity = OpenTK.Mathematics.Vector3.Zero;
+                    }
+                    return;
+                }
+            }
+
             if (_inventoryWindow.IsOpen)
                 CloseInventory();
             else
                 OpenInventory();
             return;
+        }
+
+        // V key: spawn a vehicle at the player's position.
+        if (e.Key == Keys.V && _gameState == GameState.Playing && _vehicle == null)
+        {
+            // Spawn the vehicle 2m above the player's feet so it doesn't overlap ground statics.
+            var feet = _camera.FeetPosition;
+            var spawnPos = new SNVector3(feet.X, feet.Y + 2.0f, feet.Z);
+            _vehicle = new Vehicle(_world, spawnPos, _vehicleRenderer);
         }
 
         if (e.Key == Keys.F3 && _gameState == GameState.Playing)
@@ -444,6 +496,9 @@ public class Game : GameWindow
         WorldPersistence.SaveAll(_savePath, _world);
 
         GL.BindVertexArray(0);
+        _vehicle?.Dispose();
+        _vehicleRenderer?.Dispose();
+        _vehicleDebugRenderer?.Dispose();
         _remotePlayerRenderer?.Dispose();
         _worldRenderer.Dispose();
         _atlas.Dispose();

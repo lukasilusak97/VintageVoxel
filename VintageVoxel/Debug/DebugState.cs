@@ -11,4 +11,5 @@ public sealed class DebugState
     public bool ShowChunkBorders;
     public bool NoTextures;
     public bool LightingDebug;
+    public bool ShowVehicleDebug;
 }

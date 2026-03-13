@@ -73,6 +73,7 @@ public class DebugWindow
         ImGui.Checkbox("Show Chunk Borders", ref debugState.ShowChunkBorders);
         ImGui.Checkbox("No Textures (White)", ref debugState.NoTextures);
         ImGui.Checkbox("Lighting Debug (AO+Light)", ref debugState.LightingDebug);
+        ImGui.Checkbox("Show Vehicle Debug", ref debugState.ShowVehicleDebug);
 
         ImGui.Spacing();
 
