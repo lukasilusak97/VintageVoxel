@@ -22,7 +22,7 @@ public class Game : GameWindow
     private GpuResourceManager _gpuResources = null!;
     private Shader _shader = null!;
     private Camera _camera = null!;
-    private World _world = null!;
+    private World? _world;
     private Texture _atlas = null!;
 
     private ImGuiController _imgui = null!;
@@ -56,9 +56,9 @@ public class Game : GameWindow
     private readonly List<EntityItem> _entityItems = new();
     private EntityItemRenderer _entityRenderer = null!;
 
-    private WorldRenderer _worldRenderer = null!;
-    private WorldStreamer _worldStreamer = null!;
-    private InteractionHandler _interaction = null!;
+    private WorldRenderer? _worldRenderer;
+    private WorldStreamer? _worldStreamer;
+    private InteractionHandler? _interaction;
 
     // ─── Vehicle ───────────────────────────────────────────────────────────
     private VehicleRenderer _vehicleRenderer = null!;
@@ -121,18 +121,6 @@ public class Game : GameWindow
         float aspect = Size.X / (float)Size.Y;
         _camera = new Camera(new Vector3(16f, 35f, 50f), 70f, aspect);
 
-        _world = new World();
-        _world.Update(_camera.Position, out var initial, out _);
-
-        // Replace freshly-generated chunks with any saved counterparts before lighting.
-        foreach (var key in initial)
-        {
-            if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
-                _world.ReplaceChunk(key, saved);
-        }
-
-        LightEngine.PropagateSunlight(_world);
-
         _imgui = new ImGuiController(Size.X, Size.Y);
         _debugWindow = new DebugWindow();
         _debugState = new DebugState();
@@ -143,40 +131,10 @@ public class Game : GameWindow
         ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
         EntityRegistry.Load(Path.Combine(assetsDir, "entities.json"));
 
-        // Restore a saved player or give a fresh one a starter item.
-        if (WorldPersistence.TryLoadPlayer(_savePath, out var loadedPlayer, out var loadedPos))
-        {
-            _player = loadedPlayer;
-            _camera.Position = loadedPos;
-        }
-        else
-        {
-            var torch = ItemRegistry.All.Values.FirstOrDefault(i =>
-                i.Name.Equals("torch", StringComparison.OrdinalIgnoreCase));
-            if (torch != null)
-                _player.Inventory.AddItem(torch, 1);
-        }
-
         _entityRenderer = new EntityItemRenderer(_gpuResources);
-
-        _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,
-                                           _entityRenderer, _player.Inventory);
-
-        // Upload initial chunks (lighting already computed above).
-        foreach (var key in initial)
-            _worldRenderer.RebuildChunk(key);
-
-        // Register any MODEL blocks saved to disk as placed models.
-        foreach (var key in initial)
-            if (_world.Chunks.TryGetValue(key, out var ic)) _worldRenderer.ScanChunkForPlacedModels(ic);
 
         _vehicleRenderer = new VehicleRenderer();
         _vehicleDebugRenderer = new VehicleDebugRenderer();
-
-        _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
-        _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
-                                              _worldRenderer, _entityItems, _savePath);
-        _interaction.OnEntitySpawn = SpawnEntity;
     }
 
     protected override void OnUpdateFrame(FrameEventArgs args)
@@ -273,7 +231,7 @@ public class Game : GameWindow
                 CursorState = CursorState.Grabbed;
         }
 
-        _worldStreamer.Update(_camera.Position);
+        _worldStreamer?.Update(_camera.Position);
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
@@ -284,9 +242,9 @@ public class Game : GameWindow
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         Profiler.End("GL Clear");
 
-        _worldRenderer.Render(_camera, _entityItems, _debugState,
-                              _gameState == GameState.Playing,
-                              FramebufferSize.X, FramebufferSize.Y);
+        _worldRenderer?.Render(_camera, _entityItems, _debugState,
+                               _gameState == GameState.Playing,
+                               FramebufferSize.X, FramebufferSize.Y);
 
         // Render vehicles.
         if (_gameState == GameState.Playing && _vehicles.Count > 0)
@@ -316,7 +274,7 @@ public class Game : GameWindow
                 _creativeWindow.Draw(_inventoryWindow);
         }
 
-        if (_debugVisible && _gameState == GameState.Playing)
+        if (_debugVisible && _gameState == GameState.Playing && _worldRenderer != null)
         {
             _debugWindow.Render(
                 fps: (float)(1.0 / args.Time),
@@ -350,7 +308,7 @@ public class Game : GameWindow
         // 3-D item previews rendered AFTER ImGui so the window/slot backgrounds
         // don't paint over them.  Slot borders remain visible because scissor
         // insets by 4 px inside each slot rect.
-        if (_gameState == GameState.Playing)
+        if (_gameState == GameState.Playing && _worldRenderer != null)
         {
             var ds = ImGui.GetIO().DisplaySize;
             if (_hotbarRenderTargets.Count > 0)
@@ -376,11 +334,11 @@ public class Game : GameWindow
     {
         base.OnMouseDown(e);
 
-        if (_camera is null || _world is null) return;
+        if (_camera is null || _world is null || _interaction is null) return;
         if (_gameState != GameState.Playing) return;
         if (_inventoryWindow.IsOpen) return;
 
-        _interaction.HandleMouseDown(e);
+        _interaction?.HandleMouseDown(e);
     }
 
     protected override void OnKeyDown(KeyboardKeyEventArgs e)
@@ -432,15 +390,6 @@ public class Game : GameWindow
             return;
         }
 
-        // V key: spawn a debug vehicle at the player's position.
-        if (e.Key == Keys.V && _gameState == GameState.Playing)
-        {
-            // Spawn the vehicle 2m above the player's feet so it doesn't overlap ground statics.
-            var feet = _camera.FeetPosition;
-            var spawnPos = new SNVector3(feet.X, feet.Y + 2.0f, feet.Z);
-            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer));
-        }
-
         if (e.Key == Keys.F3 && _gameState == GameState.Playing)
         {
             _debugVisible = !_debugVisible;
@@ -457,11 +406,11 @@ public class Game : GameWindow
             (e.Modifiers & KeyModifiers.Control) != 0 &&
             _gameState == GameState.Playing)
         {
-            _lastSaveStatus = _interaction.SaveWorld();
+            _lastSaveStatus = _interaction?.SaveWorld();
         }
 
         if (e.Key == Keys.Q && _gameState == GameState.Playing)
-            _interaction.HandleItemDrop();
+            _interaction?.HandleItemDrop();
 
         // Open chat input in multiplayer.
         if (e.Key == Keys.T && _gameState == GameState.Playing && _gameClient != null)
@@ -510,8 +459,11 @@ public class Game : GameWindow
         _gameServer?.Stop();
         _lanDiscovery.Dispose();
 
-        WorldPersistence.SavePlayer(_savePath, _player, _camera.Position);
-        WorldPersistence.SaveAll(_savePath, _world);
+        if (_world != null)
+        {
+            WorldPersistence.SavePlayer(_savePath, _player, _camera.Position);
+            WorldPersistence.SaveAll(_savePath, _world);
+        }
 
         GL.BindVertexArray(0);
         foreach (var v in _vehicles)
@@ -520,7 +472,7 @@ public class Game : GameWindow
         _vehicleRenderer?.Dispose();
         _vehicleDebugRenderer?.Dispose();
         _remotePlayerRenderer?.Dispose();
-        _worldRenderer.Dispose();
+        _worldRenderer?.Dispose();
         _atlas.Dispose();
         _shader.Dispose();
         _entityRenderer.Dispose();
@@ -539,7 +491,7 @@ public class Game : GameWindow
     private void SpawnEntity(int entityId, OpenTK.Mathematics.Vector3 position)
     {
         var def = EntityRegistry.Get(entityId);
-        if (def == null) return;
+        if (def == null || _world == null) return;
 
         if (string.Equals(def.Type, "vehicle", StringComparison.OrdinalIgnoreCase))
         {
@@ -595,7 +547,7 @@ public class Game : GameWindow
     /// </summary>
     private void RebuildWorld()
     {
-        _worldRenderer.Dispose();
+        _worldRenderer?.Dispose();
         _world = new World();
         _camera.Position = new Vector3(16f, 35f, 16f);
 
@@ -1307,7 +1259,7 @@ public class Game : GameWindow
 
         if (ImGui.Button("Save & Resume", new System.Numerics.Vector2(220f, 40f)))
         {
-            _lastSaveStatus = _interaction.SaveWorld();
+            _lastSaveStatus = _interaction?.SaveWorld();
             TransitionToPlaying();
         }
 

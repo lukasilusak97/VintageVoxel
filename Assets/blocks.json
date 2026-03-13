@@ -92,6 +92,7 @@
         "id": 15,
         "name": "Water",
         "transparent": true,
+        "tint": "#3F76E4",
         "textures": { "all": "water_still" }
     },
     {
@@ -104,6 +105,132 @@
             "south": "grass_block_snow",
             "east": "grass_block_snow",
             "west": "grass_block_snow"
+        }
+    },
+    {
+        "id": 17,
+        "name": "Birch Log",
+        "textures": {
+            "up": "birch_log_top",
+            "down": "birch_log_top",
+            "north": "birch_log",
+            "south": "birch_log",
+            "east": "birch_log",
+            "west": "birch_log"
+        }
+    },
+    {
+        "id": 18,
+        "name": "Birch Leaves",
+        "transparent": true,
+        "tint": "#6BA741",
+        "textures": { "all": "birch_leaves" }
+    },
+    {
+        "id": 19,
+        "name": "Spruce Log",
+        "textures": {
+            "up": "spruce_log_top",
+            "down": "spruce_log_top",
+            "north": "spruce_log",
+            "south": "spruce_log",
+            "east": "spruce_log",
+            "west": "spruce_log"
+        }
+    },
+    {
+        "id": 20,
+        "name": "Spruce Leaves",
+        "transparent": true,
+        "tint": "#619961",
+        "textures": { "all": "spruce_leaves" }
+    },
+    {
+        "id": 21,
+        "name": "Dark Oak Log",
+        "textures": {
+            "up": "dark_oak_log_top",
+            "down": "dark_oak_log_top",
+            "north": "dark_oak_log",
+            "south": "dark_oak_log",
+            "east": "dark_oak_log",
+            "west": "dark_oak_log"
+        }
+    },
+    {
+        "id": 22,
+        "name": "Dark Oak Leaves",
+        "transparent": true,
+        "tint": "#3A7A1A",
+        "textures": { "all": "dark_oak_leaves" }
+    },
+    {
+        "id": 23,
+        "name": "Acacia Log",
+        "textures": {
+            "up": "acacia_log_top",
+            "down": "acacia_log_top",
+            "north": "acacia_log",
+            "south": "acacia_log",
+            "east": "acacia_log",
+            "west": "acacia_log"
+        }
+    },
+    {
+        "id": 24,
+        "name": "Acacia Leaves",
+        "transparent": true,
+        "tint": "#AEA42A",
+        "textures": { "all": "acacia_leaves" }
+    },
+    {
+        "id": 25,
+        "name": "Cherry Log",
+        "textures": {
+            "up": "cherry_log_top",
+            "down": "cherry_log_top",
+            "north": "cherry_log",
+            "south": "cherry_log",
+            "east": "cherry_log",
+            "west": "cherry_log"
+        }
+    },
+    {
+        "id": 26,
+        "name": "Cherry Leaves",
+        "transparent": true,
+        "tint": "#FFB7C5",
+        "textures": { "all": "cherry_leaves" }
+    },
+    {
+        "id": 27,
+        "name": "Jungle Log",
+        "textures": {
+            "up": "jungle_log_top",
+            "down": "jungle_log_top",
+            "north": "jungle_log",
+            "south": "jungle_log",
+            "east": "jungle_log",
+            "west": "jungle_log"
+        }
+    },
+    {
+        "id": 28,
+        "name": "Jungle Leaves",
+        "transparent": true,
+        "tint": "#30BB0B",
+        "textures": { "all": "jungle_leaves" }
+    },
+    {
+        "id": 29,
+        "name": "Podzol",
+        "textures": {
+            "up": "podzol_top",
+            "down": "dirt",
+            "north": "podzol_side",
+            "south": "podzol_side",
+            "east": "podzol_side",
+            "west": "podzol_side"
         }
     }
 ]

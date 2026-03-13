@@ -19,11 +19,16 @@ public readonly struct ChunkMesh
 {
     public readonly float[] Vertices; // 8 floats per vertex: x,y,z,u,v,sunLight,blockLight,ao
     public readonly uint[] Indices;
+    public readonly float[] TransparentVertices;
+    public readonly uint[] TransparentIndices;
 
-    public ChunkMesh(float[] vertices, uint[] indices)
+    public ChunkMesh(float[] vertices, uint[] indices,
+                     float[] transparentVertices, uint[] transparentIndices)
     {
         Vertices = vertices;
         Indices = indices;
+        TransparentVertices = transparentVertices;
+        TransparentIndices = transparentIndices;
     }
 }
 
@@ -135,6 +140,8 @@ public static class ChunkMeshBuilder
         // 4 verts × 8 floats + 6 indices per face.
         var verts = new List<float>(4096 * 32);
         var indices = new List<uint>(4096 * 6);
+        var transVerts = new List<float>(512 * 32);
+        var transIndices = new List<uint>(512 * 6);
 
         for (int z = 0; z < Chunk.Size; z++)
             for (int y = 0; y < Chunk.Size; y++)
@@ -145,6 +152,7 @@ public static class ChunkMeshBuilder
                         continue;
 
                     bool partial = block.IsPartial;
+                    bool isWater = block.Id == 15;
 
                     for (int face = 0; face < 6; face++)
                     {
@@ -154,7 +162,12 @@ public static class ChunkMeshBuilder
                         bool exposed;
                         Block nb = GetNeighbour(nx, ny, nz, chunk, world);
 
-                        if (partial)
+                        if (isWater)
+                        {
+                            // Water: show faces against everything except other water.
+                            exposed = nb.Id != 15;
+                        }
+                        else if (partial)
                         {
                             // Partial block: top face is always exposed (never flush with cell ceiling).
                             // Side faces: exposed if neighbor is transparent or also partial.
@@ -178,11 +191,17 @@ public static class ChunkMeshBuilder
                         }
 
                         if (exposed)
-                            EmitFace(verts, indices, face, x, y, z, block, chunk, world);
+                        {
+                            if (isWater)
+                                EmitFace(transVerts, transIndices, face, x, y, z, block, chunk, world);
+                            else
+                                EmitFace(verts, indices, face, x, y, z, block, chunk, world);
+                        }
                     }
                 }
 
-        return new ChunkMesh(verts.ToArray(), indices.ToArray());
+        return new ChunkMesh(verts.ToArray(), indices.ToArray(),
+                             transVerts.ToArray(), transIndices.ToArray());
     }
 
     /// <summary>Returns the block at the given local coordinate, crossing chunk boundaries via world.</summary>

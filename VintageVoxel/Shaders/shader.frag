@@ -15,6 +15,7 @@ uniform sampler2D uShadowMap;  // depth texture rendered from light's POV
 uniform int       uNoTexture;
 uniform float     uFogStart;   // distance at which fog begins (blocks)
 uniform float     uFogEnd;     // distance at which fog is fully opaque
+uniform float     uAlphaOverride; // when >= 0, overrides output alpha (water pass)
 
 // ---------------------------------------------------------------------------
 // Color temperatures
@@ -146,5 +147,6 @@ void main()
     // Gamma encode (linear to sRGB approximate)
     color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
 
-    FragColor = vec4(color, 1.0);
+    float alpha = (uAlphaOverride >= 0.0) ? uAlphaOverride : 1.0;
+    FragColor = vec4(color, alpha);
 }

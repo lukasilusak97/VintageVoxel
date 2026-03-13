@@ -17,6 +17,7 @@ public sealed class WorldRenderer : IDisposable
     private readonly record struct ModelGpu(GpuMesh Mesh, int TexHandle);
 
     private readonly Dictionary<Vector3i, GpuMesh> _chunkGpuData = new();
+    private readonly Dictionary<Vector3i, GpuMesh> _chunkTransGpuData = new();
     private readonly Dictionary<int, ModelGpu> _modelGpu = new();
     private readonly Dictionary<Vector3i, EntityItem> _placedModels = new();
 
@@ -137,11 +138,13 @@ public sealed class WorldRenderer : IDisposable
     // Chunk GPU lifecycle
     // -------------------------------------------------------------------------
 
-    /// <summary>Meshes <paramref name="chunk"/> and uploads it to the GPU.</summary>
-    private GpuMesh UploadChunkGpu(Chunk chunk)
+    /// <summary>Meshes <paramref name="chunk"/> and uploads opaque + transparent GPU data.</summary>
+    private (GpuMesh opaque, GpuMesh transparent) UploadChunkGpu(Chunk chunk)
     {
         ChunkMesh mesh = ChunkMeshBuilder.Build(chunk, _world);
-        return _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 8);
+        var opaque = _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 8);
+        var transparent = _gpu.UploadMesh(mesh.TransparentVertices, mesh.TransparentIndices, 8);
+        return (opaque, transparent);
     }
 
     /// <summary>
@@ -152,15 +155,25 @@ public sealed class WorldRenderer : IDisposable
     {
         if (!_world.Chunks.TryGetValue(key, out var chunk)) return;
         if (_chunkGpuData.TryGetValue(key, out var old)) _gpu.Free(old);
-        _chunkGpuData[key] = UploadChunkGpu(chunk);
+        if (_chunkTransGpuData.TryGetValue(key, out var oldTrans)) _gpu.Free(oldTrans);
+        var (opaque, transparent) = UploadChunkGpu(chunk);
+        _chunkGpuData[key] = opaque;
+        _chunkTransGpuData[key] = transparent;
     }
 
     /// <summary>Frees the GPU mesh for <paramref name="key"/> and removes it from the cache.</summary>
     public void TryFreeChunkGpu(Vector3i key)
     {
-        if (!_chunkGpuData.TryGetValue(key, out var gpu)) return;
-        _gpu.Free(gpu);
-        _chunkGpuData.Remove(key);
+        if (_chunkGpuData.TryGetValue(key, out var gpu))
+        {
+            _gpu.Free(gpu);
+            _chunkGpuData.Remove(key);
+        }
+        if (_chunkTransGpuData.TryGetValue(key, out var transGpu))
+        {
+            _gpu.Free(transGpu);
+            _chunkTransGpuData.Remove(key);
+        }
     }
 
     /// <summary>
@@ -395,6 +408,7 @@ public sealed class WorldRenderer : IDisposable
         float renderDist = World.RenderDistance * Chunk.Size;
         _shader.SetFloat("uFogStart", renderDist * 0.60f);
         _shader.SetFloat("uFogEnd", renderDist * 0.95f);
+        _shader.SetFloat("uAlphaOverride", -1.0f);
 
         var view = camera.GetViewMatrix();
         var projection = camera.GetProjectionMatrix();
@@ -417,6 +431,11 @@ public sealed class WorldRenderer : IDisposable
         if (_placedModels.Count > 0)
             RenderPlacedModels();
         Profiler.End("Entity Render");
+
+        // Transparent water pass — after all opaque geometry and entities.
+        Profiler.Begin("Water Draw");
+        RenderTransparentChunks(frustum);
+        Profiler.End("Water Draw");
 
         if (debug.WireframeMode)
             GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
@@ -453,6 +472,38 @@ public sealed class WorldRenderer : IDisposable
             GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount, DrawElementsType.UnsignedInt, 0);
         }
         GL.BindVertexArray(0);
+    }
+
+    private void RenderTransparentChunks(Frustum frustum)
+    {
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.DepthMask(false); // don't write depth for transparent geometry
+        _shader.SetFloat("uAlphaOverride", 0.55f);
+
+        foreach (var (key, gpu) in _chunkTransGpuData)
+        {
+            if (gpu.IndexCount == 0) continue;
+
+            int wx = key.X * Chunk.Size;
+            int wy = key.Y * Chunk.Size;
+            int wz = key.Z * Chunk.Size;
+            if (!frustum.ContainsAabb(
+                    new Vector3(wx, wy, wz),
+                    new Vector3(wx + Chunk.Size, wy + Chunk.Size, wz + Chunk.Size)))
+                continue;
+
+            var model = Matrix4.CreateTranslation(wx, wy, wz);
+            _shader.SetMatrix4("model", ref model);
+
+            GL.BindVertexArray(gpu.Vao);
+            GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount, DrawElementsType.UnsignedInt, 0);
+        }
+        GL.BindVertexArray(0);
+
+        _shader.SetFloat("uAlphaOverride", -1.0f);
+        GL.DepthMask(true);
+        GL.Disable(EnableCap.Blend);
     }
 
     private void RenderPlacedModels()
@@ -632,6 +683,10 @@ public sealed class WorldRenderer : IDisposable
         foreach (var gpu in _chunkGpuData.Values)
             _gpu.Free(gpu);
         _chunkGpuData.Clear();
+
+        foreach (var gpu in _chunkTransGpuData.Values)
+            _gpu.Free(gpu);
+        _chunkTransGpuData.Clear();
 
         foreach (var mg in _modelGpu.Values)
         {
