@@ -20,14 +20,6 @@ namespace VintageVoxel;
 ///   Block RLE:
 ///     [4 bytes]  Entry count (int32).
 ///     Per entry: [2 bytes] block ID (ushort) + [2 bytes] run length (ushort).
-///   Chiseled blocks:
-///     [4 bytes]  Chiseled block count (int32).
-///     Per block:
-///       [4 bytes]  Flat array index (int32).
-///       [2 bytes]  Source block ID (ushort).
-///       Sub-voxel RLE:
-///         [4 bytes]  Entry count (int32).
-///         Per entry: [1 byte] filled (0/1) + [2 bytes] run length (ushort).
 ///
 /// RLE compression:
 ///   Run-Length Encoding exploits the long uniform runs that dominate voxel
@@ -37,8 +29,7 @@ namespace VintageVoxel;
 public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
-    private const byte Version = 3;  // v3 adds per-block Shape byte array after block-ID RLE
-    private const int SubVolume = ChiseledBlockData.SubSize * ChiseledBlockData.SubSize * ChiseledBlockData.SubSize; // 4096
+    private const byte Version = 4;  // v4 removes chiseled block data
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
     public static string SavesRootPath { get; } = Path.Combine(
@@ -191,15 +182,6 @@ public static class WorldPersistence
 
         // --- Shape RLE (v3+) ---
         WriteShapeRle(bw, chunk);
-
-        // --- Chiseled block data ---
-        bw.Write(chunk.ChiseledBlocks.Count);
-        foreach (var (flatIdx, chisel) in chunk.ChiseledBlocks)
-        {
-            bw.Write(flatIdx);
-            bw.Write(chisel.SourceBlockId);
-            WriteSubVoxelRle(bw, chisel);
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -231,9 +213,9 @@ public static class WorldPersistence
             byte[] magic = br.ReadBytes(4);
             if (!magic.AsSpan().SequenceEqual(Magic.AsSpan())) return false;
 
-            // Validate version — accept v2 (no Shape data) and v3 (with Shape data).
+            // Validate version — accept v2 (no Shape data), v3 (with Shape + chiseled), and v4.
             byte version = br.ReadByte();
-            if (version != Version && version != 2) return false;
+            if (version < 2 || version > Version) return false;
 
             int cx = br.ReadInt32();
             int cy = br.ReadInt32();
@@ -252,15 +234,22 @@ public static class WorldPersistence
 
             chunk.LoadBlocksFromSave(blockIds, shapes);
 
-            // Decode any chiseled block data.
-            int chiseledCount = br.ReadInt32();
-            for (int i = 0; i < chiseledCount; i++)
+            // Skip chiseled block data from v3 saves (no longer used).
+            if (version == 3)
             {
-                int flatIdx = br.ReadInt32();
-                ushort srcId = br.ReadUInt16();
-                var chisel = new ChiseledBlockData(srcId);
-                ReadSubVoxelRle(br, chisel);
-                chunk.ChiseledBlocks[flatIdx] = chisel;
+                int chiseledCount = br.ReadInt32();
+                for (int i = 0; i < chiseledCount; i++)
+                {
+                    br.ReadInt32();   // flat index
+                    br.ReadUInt16();  // source block ID
+                    // skip sub-voxel RLE
+                    int entryCount = br.ReadInt32();
+                    for (int e = 0; e < entryCount; e++)
+                    {
+                        br.ReadByte();    // filled
+                        br.ReadUInt16();  // run length
+                    }
+                }
             }
 
             return true;
@@ -356,47 +345,6 @@ public static class WorldPersistence
                 ids[pos++] = id;
         }
         return ids;
-    }
-
-    // -------------------------------------------------------------------------
-    // RLE helpers — sub-voxels
-    // -------------------------------------------------------------------------
-
-    private static void WriteSubVoxelRle(BinaryWriter bw, ChiseledBlockData chisel)
-    {
-        var runs = new List<(bool filled, ushort count)>(32);
-        int i = 0;
-        while (i < SubVolume)
-        {
-            bool val = chisel.GetRaw(i);
-            int run = 1;
-            while (i + run < SubVolume && chisel.GetRaw(i + run) == val && run < ushort.MaxValue)
-                run++;
-            runs.Add((val, (ushort)run));
-            i += run;
-        }
-
-        bw.Write(runs.Count);
-        foreach (var (filled, count) in runs)
-        {
-            bw.Write((byte)(filled ? 1 : 0)); // bool as byte
-            bw.Write(count);                  // ushort
-        }
-    }
-
-    private static void ReadSubVoxelRle(BinaryReader br, ChiseledBlockData chisel)
-    {
-        // The chisel was created with all sub-voxels = true (constructor default).
-        // The RLE covers all SubVolume positions, so every cell will be overwritten.
-        int entryCount = br.ReadInt32();
-        int pos = 0;
-        for (int e = 0; e < entryCount; e++)
-        {
-            bool val = br.ReadByte() != 0;
-            ushort count = br.ReadUInt16();
-            for (int j = 0; j < count && pos < SubVolume; j++)
-                chisel.SetRaw(pos++, val);
-        }
     }
 
     // -------------------------------------------------------------------------

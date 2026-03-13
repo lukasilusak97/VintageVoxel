@@ -32,7 +32,6 @@ public enum PlayerActionKind : byte
 {
     Break = 0,
     Place = 1,
-    Chisel = 2,
 }
 
 // ---------------------------------------------------------------------------

@@ -189,31 +189,6 @@ public class World
     }
 
     // -------------------------------------------------------------------------
-    // Phase 13: Chiseled block query
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Returns the <see cref="ChiseledBlockData"/> for the block at the given
-    /// world-space integer coordinates, or <c>null</c> if the block is not
-    /// chiseled / the chunk is not loaded.
-    /// </summary>
-    public ChiseledBlockData? GetChiselData(int worldX, int worldY, int worldZ)
-    {
-        int cx = (int)MathF.Floor((float)worldX / Chunk.Size);
-        int cy = (int)MathF.Floor((float)worldY / Chunk.Size);
-        int cz = (int)MathF.Floor((float)worldZ / Chunk.Size);
-
-        if (!_chunks.TryGetValue(new Vector3i(cx, cy, cz), out Chunk? chunk)) return null;
-
-        int lx = worldX - cx * Chunk.Size;
-        int ly = worldY - cy * Chunk.Size;
-        int lz = worldZ - cz * Chunk.Size;
-        int idx = Chunk.Index(lx, ly, lz);
-        chunk.ChiseledBlocks.TryGetValue(idx, out var chisel);
-        return chisel;
-    }
-
-    // -------------------------------------------------------------------------
     // Phase 14: persistence support
     // -------------------------------------------------------------------------
 

@@ -164,8 +164,6 @@ public class DebugWindow
 
         ImGui.TextDisabled("[F3] Toggle debug UI  [F] Toggle Creative/Survival");
         ImGui.TextDisabled("[Ctrl+S] Save world  [Scroll] Cycle hotbar");
-        ImGui.TextDisabled("[Middle Click] Chisel block");
-        ImGui.TextDisabled("[LClick] Remove sub-voxel  [RClick] Add sub-voxel");
 
         ImGui.End();
     }

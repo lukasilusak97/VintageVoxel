@@ -22,13 +22,6 @@ public struct Block
     public bool IsTransparent;
 
     /// <summary>
-    /// Special ID that marks a block as a chiseled (micro-block) container.
-    /// The block stores a <see cref="ChiseledBlockData"/> object in
-    /// <see cref="Chunk.ChiseledBlocks"/> at its flat array index.
-    /// </summary>
-    public const ushort ChiseledId = 999;
-
-    /// <summary>
     /// Geometry shape of this block.  0 = full cube (default).  All non-zero
     /// values map to <see cref="SlopeShape"/> — a diagonal ramp, outer corner,
     /// or inner corner.  Shape is used by the mesher and the collision system.

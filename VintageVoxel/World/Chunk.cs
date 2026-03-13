@@ -33,12 +33,6 @@ public class Chunk
     public readonly byte[] SunLight = new byte[Volume];
     public readonly byte[] BlockLight = new byte[Volume];
 
-    /// <summary>
-    /// Per-block chiseled data keyed by the flat array index of the block.
-    /// Only populated for blocks whose Id == Block.ChiseledId.
-    /// </summary>
-    public Dictionary<int, ChiseledBlockData> ChiseledBlocks { get; } = new();
-
     public Chunk(OpenTK.Mathematics.Vector3i position)
     {
         Position = position;
@@ -430,20 +424,4 @@ public class Chunk
 
     /// <summary>Converts local (x, y, z) to a flat array index.</summary>
     public static int Index(int x, int y, int z) => x + Size * (y + Size * z);
-
-    /// <summary>
-    /// Returns the <see cref="ChiseledBlockData"/> for the block at (x, y, z),
-    /// creating a fully-filled entry with <paramref name="sourceId"/> textures
-    /// if one does not yet exist.
-    /// </summary>
-    public ChiseledBlockData GetOrCreateChiseled(int x, int y, int z, ushort sourceId = 1)
-    {
-        int idx = Index(x, y, z);
-        if (!ChiseledBlocks.TryGetValue(idx, out var data))
-        {
-            data = new ChiseledBlockData(sourceId);
-            ChiseledBlocks[idx] = data;
-        }
-        return data;
-    }
 }

@@ -7,7 +7,7 @@ using VintageVoxel.Rendering;
 namespace VintageVoxel;
 
 /// <summary>
-/// Handles all player-world interactions: block breaking/placing/chiseling and
+/// Handles all player-world interactions: block breaking/placing and
 /// item dropping. Delegates the actual mesh rebuilds and placed-model tracking
 /// to <see cref="WorldRenderer"/>.
 /// </summary>
@@ -47,40 +47,12 @@ public sealed class InteractionHandler
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
-                if (hit.IsChiseled)
-                {
-                    var chisel = _world.GetChiselData(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
-                    if (chisel != null)
-                    {
-                        chisel.Set(hit.SubVoxelPos.X, hit.SubVoxelPos.Y, hit.SubVoxelPos.Z, false);
-
-                        if (!chisel.HasAnyFilled())
-                        {
-                            ushort chiseledId = _world.GetBlock(
-                                hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
-                            _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
-                            int cx = (int)MathF.Floor((float)hit.BlockPos.X / Chunk.Size);
-                            int cy = (int)MathF.Floor((float)hit.BlockPos.Y / Chunk.Size);
-                            int cz = (int)MathF.Floor((float)hit.BlockPos.Z / Chunk.Size);
-                            if (_world.Chunks.TryGetValue(new Vector3i(cx, cy, cz), out var ch))
-                                ch.ChiseledBlocks.Remove(Chunk.Index(
-                                    hit.BlockPos.X - cx * Chunk.Size,
-                                    hit.BlockPos.Y - cy * Chunk.Size,
-                                    hit.BlockPos.Z - cz * Chunk.Size));
-                            LightEngine.UpdateAtBlock(hit.BlockPos, _world);
-                            SpawnBlockDrop(chiseledId, hit.BlockPos);
-                        }
-                    }
-                }
-                else
-                {
-                    ushort brokenId = _world.GetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
-                    _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
-                    LightEngine.UpdateAtBlock(hit.BlockPos, _world);
-                    _renderer.RemovePlacedModel(hit.BlockPos);
-                    SpawnBlockDrop(brokenId, hit.BlockPos);
-                    NetworkClient?.SendPlayerAction(PlayerActionKind.Break, hit.BlockPos, 0, Vector3i.Zero);
-                }
+                ushort brokenId = _world.GetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
+                _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
+                LightEngine.UpdateAtBlock(hit.BlockPos, _world);
+                _renderer.RemovePlacedModel(hit.BlockPos);
+                SpawnBlockDrop(brokenId, hit.BlockPos);
+                NetworkClient?.SendPlayerAction(PlayerActionKind.Break, hit.BlockPos, 0, Vector3i.Zero);
                 _renderer.RebuildAffectedChunks(hit.BlockPos);
             }
         }
@@ -89,46 +61,8 @@ public sealed class InteractionHandler
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
-                if (hit.IsChiseled)
-                {
-                    var newSub = hit.SubVoxelPos + hit.SubNormal;
-                    var chisel = _world.GetChiselData(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
-                    if (chisel != null && ChiseledBlockData.InBounds(newSub.X, newSub.Y, newSub.Z))
-                    {
-                        chisel.Set(newSub.X, newSub.Y, newSub.Z, true);
-                        _renderer.RebuildAffectedChunks(hit.BlockPos);
-                    }
-                    else
-                    {
-                        var place = hit.BlockPos + hit.Normal;
-                        PlaceHeldBlock(place.X, place.Y, place.Z);
-                    }
-                }
-                else
-                {
-                    var place = hit.BlockPos + hit.Normal;
-                    PlaceHeldBlock(place.X, place.Y, place.Z);
-                }
-            }
-        }
-        else if (e.Button == MouseButton.Middle)
-        {
-            var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
-            if (hit.Hit && !hit.IsChiseled)
-            {
-                int wx = hit.BlockPos.X, wy = hit.BlockPos.Y, wz = hit.BlockPos.Z;
-                ushort origId = _world.GetBlock(wx, wy, wz).Id;
-
-                _world.SetBlock(wx, wy, wz, new Block { Id = Block.ChiseledId, IsTransparent = false });
-
-                int cx = (int)MathF.Floor((float)wx / Chunk.Size);
-                int cy = (int)MathF.Floor((float)wy / Chunk.Size);
-                int cz = (int)MathF.Floor((float)wz / Chunk.Size);
-                if (_world.Chunks.TryGetValue(new Vector3i(cx, cy, cz), out var chunk))
-                    chunk.GetOrCreateChiseled(wx - cx * Chunk.Size, wy - cy * Chunk.Size, wz - cz * Chunk.Size, origId);
-
-                LightEngine.UpdateAtBlock(hit.BlockPos, _world);
-                _renderer.RebuildAffectedChunks(hit.BlockPos);
+                var place = hit.BlockPos + hit.Normal;
+                PlaceHeldBlock(place.X, place.Y, place.Z);
             }
         }
     }
