@@ -251,6 +251,31 @@ public class Chunk
                 }
             }
 
+        // Slope pass: classify surface blocks using ComputeSurfaceY for neighbors.
+        // ComputeSurfaceY is a pure noise function, so neighbor chunks never need to
+        // be loaded — slopes are fully determined at generation time from the same
+        // noise that produced the heightmap.
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int surfaceY = surfaceMap[x + z * Size];
+                float wx = startWx + x;
+                float wz = startWz + z;
+
+                int hN = ComputeSurfaceY(wx, wz - 1);
+                int hS = ComputeSurfaceY(wx, wz + 1);
+                int hE = ComputeSurfaceY(wx + 1, wz);
+                int hW = ComputeSurfaceY(wx - 1, wz);
+                int hNE = ComputeSurfaceY(wx + 1, wz - 1);
+                int hNW = ComputeSurfaceY(wx - 1, wz - 1);
+                int hSE = ComputeSurfaceY(wx + 1, wz + 1);
+                int hSW = ComputeSurfaceY(wx - 1, wz + 1);
+
+                SlopeShape shape = ClassifySlope(surfaceY, hN, hS, hE, hW, hNE, hNW, hSE, hSW);
+                if (shape != SlopeShape.Cube)
+                    _blocks[Index(x, surfaceY, z)].Shape = (byte)shape;
+            }
+
         // Place trees — scan an extended border region so trees whose trunks land
         // outside this chunk still deposit leaves inside it (no cross-chunk seams).
         for (int tz = startWz - 2; tz < startWz + Size + 2; tz++)
@@ -337,6 +362,66 @@ public class Chunk
                     else b = new Block { Id = 2, IsTransparent = false }; // Stone
                     _blocks[Index(x, y, z)] = b;
                 }
+    }
+
+    // ------------------------------------------------------------------
+    // Slope classification
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Classifies the slope shape for a surface block at height <paramref name="h"/>
+    /// given the surface heights of its 8 neighbours.  Only 1-block drops are
+    /// considered; larger drops remain as Cube (cliff).
+    /// </summary>
+    private static SlopeShape ClassifySlope(
+        int h,
+        int hN, int hS, int hE, int hW,
+        int hNE, int hNW, int hSE, int hSW)
+    {
+        bool dropN = hN == h - 1;
+        bool dropS = hS == h - 1;
+        bool dropE = hE == h - 1;
+        bool dropW = hW == h - 1;
+
+        int cardinalDrops = (dropN ? 1 : 0) + (dropS ? 1 : 0)
+                          + (dropE ? 1 : 0) + (dropW ? 1 : 0);
+
+        if (cardinalDrops == 1)
+        {
+            if (dropN) return SlopeShape.RampN;
+            if (dropS) return SlopeShape.RampS;
+            if (dropE) return SlopeShape.RampE;
+            if (dropW) return SlopeShape.RampW;
+        }
+
+        if (cardinalDrops == 2)
+        {
+            if (dropN && dropE) return SlopeShape.OuterCornerNE;
+            if (dropN && dropW) return SlopeShape.OuterCornerNW;
+            if (dropS && dropE) return SlopeShape.OuterCornerSE;
+            if (dropS && dropW) return SlopeShape.OuterCornerSW;
+        }
+
+        if (cardinalDrops == 0)
+        {
+            bool dropNE = hNE == h - 1;
+            bool dropNW = hNW == h - 1;
+            bool dropSE = hSE == h - 1;
+            bool dropSW = hSW == h - 1;
+
+            int diagDrops = (dropNE ? 1 : 0) + (dropNW ? 1 : 0)
+                          + (dropSE ? 1 : 0) + (dropSW ? 1 : 0);
+
+            if (diagDrops == 1)
+            {
+                if (dropNE) return SlopeShape.InnerCornerNE;
+                if (dropNW) return SlopeShape.InnerCornerNW;
+                if (dropSE) return SlopeShape.InnerCornerSE;
+                if (dropSW) return SlopeShape.InnerCornerSW;
+            }
+        }
+
+        return SlopeShape.Cube;
     }
 
     // ------------------------------------------------------------------
