@@ -6,9 +6,8 @@ namespace VintageVoxel;
 /// <summary>
 /// Drives chunk streaming each frame: runs the world update, unloads chunks that
 /// left the render radius, and loads + lights + meshes chunks that entered it.
-/// Also triggers the slope-placement pass once a chunk and all 8 horizontal
-/// neighbours are loaded.  When a new chunk fills in a missing neighbour slot,
-/// the already-loaded neighbours are re-queued so their edge blocks get correct slopes.
+/// When a new chunk fills in a missing neighbour slot, the already-loaded
+/// neighbours are re-queued so their edge blocks get correct lighting.
 /// </summary>
 public sealed class WorldStreamer
 {

@@ -310,7 +310,7 @@ public sealed class GameServer : IDisposable
             case PlayerActionKind.Place:
                 {
                     var target = p.BlockPos + p.Normal;
-                    var block = new Block { Id = p.BlockId, IsTransparent = BlockRegistry.IsTransparent(p.BlockId) };
+                    var block = new Block { Id = p.BlockId, IsTransparent = BlockRegistry.IsTransparent(p.BlockId), Layer = (byte)(p.BlockId == 0 ? 0 : 16) };
                     _world.SetBlock(target.X, target.Y, target.Z, block);
                     LightEngine.UpdateAtBlock(target, _world);
                     BroadcastAll(w =>

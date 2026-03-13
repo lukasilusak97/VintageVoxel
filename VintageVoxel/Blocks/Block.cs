@@ -22,18 +22,24 @@ public struct Block
     public bool IsTransparent;
 
     /// <summary>
-    /// Geometry shape of this block.  0 = full cube (default).  All non-zero
-    /// values map to <see cref="SlopeShape"/> — a diagonal ramp, outer corner,
-    /// or inner corner.  Shape is used by the mesher and the collision system.
+    /// Number of filled horizontal layers from the bottom, 0–16.
+    /// 16 = full cube. 1–15 = partial block. 0 = air (no geometry).
+    /// Each layer is 1/16th of a block in height.
     /// </summary>
-    public byte Shape;
+    public byte Layer;
 
     /// <summary>Air — the absence of a block.</summary>
-    public static readonly Block Air = new Block { Id = 0, IsTransparent = true };
+    public static readonly Block Air = new Block { Id = 0, IsTransparent = true, Layer = 0 };
 
     /// <summary>Convenience: returns true when this block occupies no space.</summary>
     public readonly bool IsEmpty => Id == 0;
 
-    /// <summary>Convenience: true when this block has non-cube slope geometry.</summary>
-    public readonly bool IsSlope => Shape != (byte)SlopeShape.Cube;
+    /// <summary>True when this block fills the full cube height (all 16 layers).</summary>
+    public readonly bool IsFullBlock => Layer >= 16;
+
+    /// <summary>True when this block is a partial layer block (1–15 layers).</summary>
+    public readonly bool IsPartial => Layer > 0 && Layer < 16;
+
+    /// <summary>Fractional top height within this block's cell [0, 1].</summary>
+    public readonly float TopOffset => Layer / 16f;
 }

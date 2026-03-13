@@ -114,7 +114,7 @@ public sealed class InteractionHandler
         {
             var item = held.Item;
             _inventory.RemoveItem(item, 1);
-            _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)item.Id, IsTransparent = true });
+            _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)item.Id, IsTransparent = true, Layer = 16 });
             LightEngine.UpdateAtBlock(blockPos, _world);
             _renderer.AddPlacedModel(blockPos, item);
             _renderer.RebuildAffectedChunks(blockPos);
@@ -124,7 +124,7 @@ public sealed class InteractionHandler
 
         ushort id = (ushort)held.Item!.Id;
         _inventory.RemoveItem(held.Item!, 1);
-        _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false });
+        _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false, Layer = 16 });
         LightEngine.UpdateAtBlock(blockPos, _world);
         _renderer.RebuildAffectedChunks(blockPos);
         NetworkClient?.SendPlayerAction(PlayerActionKind.Place, blockPos, id, Vector3i.Zero);

@@ -68,9 +68,6 @@ public static class ChunkMeshBuilder
         (+1,  0,  0), // 5 East   (+X)
     };
 
-    // Opposite face index for each of the 6 faces (used for slope culling queries).
-    private static int OppositeFace(int face) => face ^ 1;
-
     /// <summary>
     /// Ambient-occlusion corner offsets for each face.
     ///
@@ -139,10 +136,6 @@ public static class ChunkMeshBuilder
         var verts = new List<float>(4096 * 32);
         var indices = new List<uint>(4096 * 6);
 
-        // Reusable buffers for per-face slope lighting (hoisted to avoid CA2014).
-        Span<float> slopeSun = stackalloc float[6];
-        Span<float> slopeBlk = stackalloc float[6];
-
         for (int z = 0; z < Chunk.Size; z++)
             for (int y = 0; y < Chunk.Size; y++)
                 for (int x = 0; x < Chunk.Size; x++)
@@ -151,35 +144,7 @@ public static class ChunkMeshBuilder
                     if (block.Id == 0 || BlockRegistry.HasModel(block.Id))
                         continue;
 
-                    // --- Slope blocks: emit their triangular prism geometry ---
-                    if (block.IsSlope)
-                    {
-                        var slopeShape = (SlopeShape)block.Shape;
-                        int tileIdx = BlockRegistry.TileForFace(block.Id, 0 /*top*/);
-                        float su0 = tileIdx * TextureAtlas.TileUvWidth;
-                        float su1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
-                        // For slopes at terrain surface, side-face neighbors are solid
-                        // terrain with sunLight = 0. Use the sky-light from above for all
-                        // faces and apply per-face directional scale for shading depth.
-                        // Block light (torches) is taken as the max across all 6 neighbors.
-                        GetLightAt(x, y + 1, z, chunk, world, out float skyLight, out _);
-                        float maxBlockLight = 0f;
-                        for (int face = 0; face < 6; face++)
-                        {
-                            var (fdx, fdy, fdz) = NeighbourOffsets[face];
-                            GetLightAt(x + fdx, y + fdy, z + fdz, chunk, world,
-                                out _, out float bv);
-                            if (bv > maxBlockLight) maxBlockLight = bv;
-                        }
-                        for (int face = 0; face < 6; face++)
-                        {
-                            slopeSun[face] = skyLight * FaceSunScale[face];
-                            slopeBlk[face] = maxBlockLight;
-                        }
-                        FaceEmitter.EmitSlopeFaces(verts, indices, slopeShape,
-                            x, y, z, su0, su1, slopeSun, slopeBlk, 1.0f);
-                        continue;
-                    }
+                    bool partial = block.IsPartial;
 
                     for (int face = 0; face < 6; face++)
                     {
@@ -187,39 +152,52 @@ public static class ChunkMeshBuilder
                         int nx = x + dx, ny = y + dy, nz = z + dz;
 
                         bool exposed;
-                        if (Chunk.InBounds(nx, ny, nz))
+                        Block nb = GetNeighbour(nx, ny, nz, chunk, world);
+
+                        if (partial)
                         {
-                            Block nb = chunk.GetBlock(nx, ny, nz);
-                            // A cube face is hidden when the neighbour fully covers it:
-                            // either a solid cube neighbour, or a slope whose matching
-                            // face is fully solid (flush with the boundary).
-                            bool neighbourCovers = nb.IsSlope
-                                ? SlopeGeometry.IsFaceSolid((SlopeShape)nb.Shape, OppositeFace(face))
-                                : !nb.IsTransparent;
-                            exposed = block.IsTransparent ? nb.Id == 0 : !neighbourCovers;
-                        }
-                        else if (world != null)
-                        {
-                            int worldX = chunk.Position.X * Chunk.Size + nx;
-                            int worldY = chunk.Position.Y * Chunk.Size + ny;
-                            int worldZ = chunk.Position.Z * Chunk.Size + nz;
-                            Block nb = world.GetBlock(worldX, worldY, worldZ);
-                            bool neighbourCovers = nb.IsSlope
-                                ? SlopeGeometry.IsFaceSolid((SlopeShape)nb.Shape, OppositeFace(face))
-                                : !nb.IsTransparent;
-                            exposed = block.IsTransparent ? nb.Id == 0 : !neighbourCovers;
+                            // Partial block: top face is always exposed (never flush with cell ceiling).
+                            // Side faces: exposed if neighbor is transparent or also partial.
+                            // Bottom face: standard culling (our bottom is flush with cell floor).
+                            if (face == 0) // top
+                                exposed = true;
+                            else if (face == 1) // bottom
+                                exposed = block.IsTransparent ? nb.Id == 0 : nb.IsTransparent;
+                            else // sides
+                                exposed = block.IsTransparent ? nb.Id == 0
+                                    : (nb.IsTransparent || nb.IsPartial);
                         }
                         else
                         {
-                            exposed = true;
+                            // Full block: exposed if neighbor is transparent or partial
+                            // (a partial neighbor doesn't fully cover our face).
+                            if (block.IsTransparent)
+                                exposed = nb.Id == 0;
+                            else
+                                exposed = nb.IsTransparent || nb.IsPartial;
                         }
 
                         if (exposed)
-                            EmitFace(verts, indices, face, x, y, z, block.Id, chunk, world);
+                            EmitFace(verts, indices, face, x, y, z, block, chunk, world);
                     }
                 }
 
         return new ChunkMesh(verts.ToArray(), indices.ToArray());
+    }
+
+    /// <summary>Returns the block at the given local coordinate, crossing chunk boundaries via world.</summary>
+    private static Block GetNeighbour(int lx, int ly, int lz, Chunk chunk, World? world)
+    {
+        if (Chunk.InBounds(lx, ly, lz))
+            return chunk.GetBlock(lx, ly, lz);
+        if (world != null)
+        {
+            int wx = chunk.Position.X * Chunk.Size + lx;
+            int wy = chunk.Position.Y * Chunk.Size + ly;
+            int wz = chunk.Position.Z * Chunk.Size + lz;
+            return world.GetBlock(wx, wy, wz);
+        }
+        return Block.Air;
     }
 
     // -----------------------------------------------------------------------
@@ -246,27 +224,28 @@ public static class ChunkMeshBuilder
 
     /// <summary>
     /// Appends 4 vertices (each: x y z u v sunLight blockLight ao) and 6 indices
-    /// for one quad.
-    ///
-    /// AO is computed per-vertex from the three surrounding blocks at each corner.
-    /// Both light channels are smoothly interpolated per-vertex by averaging the
-    /// four voxels that share each corner (face-adjacent + 3 AO neighbors).
-    /// The sunLight value is then scaled by the per-face directional factor.
+    /// for one quad. For partial-layer blocks the top height is adjusted to
+    /// by + layer/16 instead of by + 1.
     /// </summary>
     private static void EmitFace(
         List<float> verts, List<uint> indices,
-        int face, int bx, int by, int bz, ushort blockId,
+        int face, int bx, int by, int bz, Block block,
         Chunk chunk, World? world)
     {
         uint baseIdx = (uint)(verts.Count / 8);
 
+        float topOffset = block.TopOffset; // 1.0 for full, < 1.0 for partial
         float x0 = bx, x1 = bx + 1f;
-        float y0 = by, y1 = by + 1f;
+        float y0 = by, y1 = by + topOffset;
         float z0 = bz, z1 = bz + 1f;
 
-        int tileIdx = BlockRegistry.TileForFace(blockId, face);
+        int tileIdx = BlockRegistry.TileForFace(block.Id, face);
         float u0 = tileIdx * TextureAtlas.TileUvWidth;
         float u1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
+
+        // For side faces of partial blocks, compress the V coordinate to
+        // show only the bottom portion of the texture matching the layer height.
+        float vTop = face >= 2 ? 1f - topOffset : 0f;
 
         float dirScale = FaceSunScale[face];
 
@@ -276,7 +255,6 @@ public static class ChunkMeshBuilder
 
         for (int v = 0; v < 4; v++)
         {
-            // --- Ambient occlusion ---
             int solidCount = 0;
             for (int k = 0; k < 3; k++)
             {
@@ -286,17 +264,11 @@ public static class ChunkMeshBuilder
             }
             ao[v] = solidCount switch { 0 => 1.0f, 1 => 0.8f, 2 => 0.6f, _ => 0.4f };
 
-            // --- Smooth per-vertex lighting: average face-adjacent + 3 AO neighbors ---
-            // The AO neighbor offsets already include the face normal component, so they
-            // land on the same layer of voxels as the face-adjacent sample.
             SampleSmoothLight(bx, by, bz, face, v, chunk, world, out float sv, out float bv);
-
             sunLight[v] = sv * dirScale;
             blkLight[v] = bv;
         }
 
-        // Flip the quad diagonal when AO values create a concave pattern,
-        // matching Minecraft's smooth-lighting quad flipping for consistent gradients.
         bool flip = (ao[0] + ao[2] < ao[1] + ao[3]);
 
         switch (face)
@@ -315,26 +287,26 @@ public static class ChunkMeshBuilder
                 break;
             case 2: // North (-Z)
                 AddV(verts, x0, y0, z0, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x0, y1, z0, u0, 0f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y1, z0, u1, 0f, sunLight[2], blkLight[2], ao[2]);
+                AddV(verts, x0, y1, z0, u0, vTop, sunLight[1], blkLight[1], ao[1]);
+                AddV(verts, x1, y1, z0, u1, vTop, sunLight[2], blkLight[2], ao[2]);
                 AddV(verts, x1, y0, z0, u1, 1f, sunLight[3], blkLight[3], ao[3]);
                 break;
             case 3: // South (+Z)
                 AddV(verts, x1, y0, z1, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x1, y1, z1, u0, 0f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x0, y1, z1, u1, 0f, sunLight[2], blkLight[2], ao[2]);
+                AddV(verts, x1, y1, z1, u0, vTop, sunLight[1], blkLight[1], ao[1]);
+                AddV(verts, x0, y1, z1, u1, vTop, sunLight[2], blkLight[2], ao[2]);
                 AddV(verts, x0, y0, z1, u1, 1f, sunLight[3], blkLight[3], ao[3]);
                 break;
             case 4: // West (-X)
                 AddV(verts, x0, y0, z1, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, 0f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x0, y1, z0, u1, 0f, sunLight[2], blkLight[2], ao[2]);
+                AddV(verts, x0, y1, z1, u0, vTop, sunLight[1], blkLight[1], ao[1]);
+                AddV(verts, x0, y1, z0, u1, vTop, sunLight[2], blkLight[2], ao[2]);
                 AddV(verts, x0, y0, z0, u1, 1f, sunLight[3], blkLight[3], ao[3]);
                 break;
             case 5: // East (+X)
                 AddV(verts, x1, y0, z0, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x1, y1, z0, u0, 0f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, 0f, sunLight[2], blkLight[2], ao[2]);
+                AddV(verts, x1, y1, z0, u0, vTop, sunLight[1], blkLight[1], ao[1]);
+                AddV(verts, x1, y1, z1, u1, vTop, sunLight[2], blkLight[2], ao[2]);
                 AddV(verts, x1, y0, z1, u1, 1f, sunLight[3], blkLight[3], ao[3]);
                 break;
         }
@@ -418,31 +390,12 @@ public static class ChunkMeshBuilder
         sun = 1.0f; block = 0f;
     }
 
-    private static float SampleLight(int lx, int ly, int lz, Chunk chunk, World? world)
-    {
-        if (Chunk.InBounds(lx, ly, lz))
-        {
-            int idx = Chunk.Index(lx, ly, lz);
-            byte sun = chunk.SunLight[idx];
-            byte blk = chunk.BlockLight[idx];
-            return Math.Max(sun, blk) / 15f;
-        }
-        if (world != null)
-        {
-            int wx = chunk.Position.X * Chunk.Size + lx;
-            int wy = chunk.Position.Y * Chunk.Size + ly;
-            int wz = chunk.Position.Z * Chunk.Size + lz;
-            return world.GetLight(wx, wy, wz);
-        }
-        return 1.0f;
-    }
-
     private static bool IsSolid(int lx, int ly, int lz, Chunk chunk, World? world)
     {
         if (Chunk.InBounds(lx, ly, lz))
         {
             Block b = chunk.GetBlock(lx, ly, lz);
-            return !b.IsTransparent && !b.IsSlope;
+            return !b.IsTransparent && b.IsFullBlock;
         }
         if (world != null)
         {
@@ -450,7 +403,7 @@ public static class ChunkMeshBuilder
             int wy = chunk.Position.Y * Chunk.Size + ly;
             int wz = chunk.Position.Z * Chunk.Size + lz;
             Block b = world.GetBlock(wx, wy, wz);
-            return !b.IsTransparent && !b.IsSlope;
+            return !b.IsTransparent && b.IsFullBlock;
         }
         return false;
     }

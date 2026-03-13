@@ -29,7 +29,7 @@ namespace VintageVoxel;
 public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
-    private const byte Version = 4;  // v4 removes chiseled block data
+    private const byte Version = 5;  // v5 replaces slope shapes with layer heights
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
     public static string SavesRootPath { get; } = Path.Combine(
@@ -103,6 +103,13 @@ public static class WorldPersistence
             else if (line.StartsWith("flat=", StringComparison.Ordinal)) bool.TryParse(line["flat=".Length..], out flat);
         }
         return (displayName, seed, flat);
+    }
+
+    /// <summary>Deletes the entire save folder for the given world.</summary>
+    public static void DeleteWorld(string savePath)
+    {
+        if (Directory.Exists(savePath))
+            Directory.Delete(savePath, recursive: true);
     }
 
     // -------------------------------------------------------------------------
@@ -180,8 +187,8 @@ public static class WorldPersistence
         // --- Block RLE (IDs) ---
         WriteBlockRle(bw, chunk);
 
-        // --- Shape RLE (v3+) ---
-        WriteShapeRle(bw, chunk);
+        // --- Layer RLE (v3+) ---
+        WriteLayerRle(bw, chunk);
     }
 
     // -------------------------------------------------------------------------
@@ -213,7 +220,7 @@ public static class WorldPersistence
             byte[] magic = br.ReadBytes(4);
             if (!magic.AsSpan().SequenceEqual(Magic.AsSpan())) return false;
 
-            // Validate version — accept v2 (no Shape data), v3 (with Shape + chiseled), and v4.
+            // Validate version — accept v2 (no shape/layer), v3 (shape + chiseled), v4, v5 (layers).
             byte version = br.ReadByte();
             if (version < 2 || version > Version) return false;
 
@@ -229,10 +236,10 @@ public static class WorldPersistence
             // Decode block RLE into the chunk's internal array.
             ushort[] blockIds = ReadBlockRle(br);
 
-            // v3+: decode Shape RLE; v2 saves have no shape data (all cubes).
-            byte[]? shapes = (version >= 3) ? ReadShapeRle(br) : null;
+            // v3+: decode layer/shape RLE; v2 saves have no layer data (all cubes).
+            byte[]? layers = (version >= 3) ? ReadLayerRle(br) : null;
 
-            chunk.LoadBlocksFromSave(blockIds, shapes);
+            chunk.LoadBlocksFromSave(blockIds, layers);
 
             // Skip chiseled block data from v3 saves (no longer used).
             if (version == 3)
@@ -267,42 +274,42 @@ public static class WorldPersistence
     // RLE helpers — blocks
     // -------------------------------------------------------------------------
 
-    private static void WriteShapeRle(BinaryWriter bw, Chunk chunk)
+    private static void WriteLayerRle(BinaryWriter bw, Chunk chunk)
     {
-        var runs = new List<(byte shape, ushort count)>(32);
+        var runs = new List<(byte layer, ushort count)>(32);
         int i = 0;
         while (i < Chunk.Volume)
         {
-            byte shape = chunk.GetRawBlockShape(i);
+            byte layer = chunk.GetRawBlockLayer(i);
             int run = 1;
             while (i + run < Chunk.Volume &&
-                   chunk.GetRawBlockShape(i + run) == shape &&
+                   chunk.GetRawBlockLayer(i + run) == layer &&
                    run < ushort.MaxValue)
                 run++;
-            runs.Add((shape, (ushort)run));
+            runs.Add((layer, (ushort)run));
             i += run;
         }
         bw.Write(runs.Count);
-        foreach (var (shape, count) in runs)
+        foreach (var (layer, count) in runs)
         {
-            bw.Write(shape);
+            bw.Write(layer);
             bw.Write(count);
         }
     }
 
-    private static byte[] ReadShapeRle(BinaryReader br)
+    private static byte[] ReadLayerRle(BinaryReader br)
     {
         int entryCount = br.ReadInt32();
-        var shapes = new byte[Chunk.Volume];
+        var layers = new byte[Chunk.Volume];
         int pos = 0;
         for (int e = 0; e < entryCount; e++)
         {
-            byte shape = br.ReadByte();
+            byte layer = br.ReadByte();
             ushort count = br.ReadUInt16();
             for (int j = 0; j < count && pos < Chunk.Volume; j++)
-                shapes[pos++] = shape;
+                layers[pos++] = layer;
         }
-        return shapes;
+        return layers;
     }
 
     private static void WriteBlockRle(BinaryWriter bw, Chunk chunk)

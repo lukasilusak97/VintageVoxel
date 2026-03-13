@@ -90,9 +90,8 @@ public static class PhysicsSystem
             camera.Position.Y -= dy;
             camera.Velocity.Y = 0f;
 
-            // Slope surface snapping: if the player is standing on a slope block,
-            // push their Y up to the exact surface height so they ride smoothly
-            // instead of bouncing on the stair-step of the voxel grid.
+            // Layer surface snapping: push the player's eye Y up to the exact
+            // layer surface height so they ride smoothly over partial blocks.
             float surfaceY = CollisionSystem.GetSurfaceHeightAt(
                 camera.Position.X, camera.Position.Z, world);
             float targetEyeY = surfaceY + GameConstants.Physics.EyeHeight;

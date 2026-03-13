@@ -66,24 +66,27 @@ public class Chunk
     /// <summary>Returns the raw block ID at the given flat array index. Used by WorldPersistence.</summary>
     internal ushort GetRawBlockId(int flatIndex) => _blocks[flatIndex].Id;
 
-    /// <summary>Returns the raw block Shape at the given flat array index. Used by WorldPersistence.</summary>
-    internal byte GetRawBlockShape(int flatIndex) => _blocks[flatIndex].Shape;
+    /// <summary>Returns the raw block Layer at the given flat array index. Used by WorldPersistence.</summary>
+    internal byte GetRawBlockLayer(int flatIndex) => _blocks[flatIndex].Layer;
 
     /// <summary>
-    /// Overwrites the entire block array from a saved ID (and optional shape) list produced by
+    /// Overwrites the entire block array from a saved ID (and optional layer) list produced by
     /// <see cref="WorldPersistence"/>.  Transparency is resolved through the
     /// block registry so water, leaves, and other transparent blocks render correctly.
-    /// <paramref name="savedShapes"/> may be null for older saves (v2), which default to Shape=0.
+    /// <paramref name="savedLayers"/> may be null for older saves, which default to Layer=16 (full) for solid, 0 for air.
     /// </summary>
-    internal void LoadBlocksFromSave(ushort[] savedIds, byte[]? savedShapes = null)
+    internal void LoadBlocksFromSave(ushort[] savedIds, byte[]? savedLayers = null)
     {
         for (int i = 0; i < Volume; i++)
+        {
+            bool transparent = BlockRegistry.IsTransparent(savedIds[i]);
             _blocks[i] = new Block
             {
                 Id = savedIds[i],
-                IsTransparent = BlockRegistry.IsTransparent(savedIds[i]),
-                Shape = savedShapes != null ? savedShapes[i] : (byte)0,
+                IsTransparent = transparent,
+                Layer = savedLayers != null ? savedLayers[i] : (byte)(savedIds[i] == 0 ? 0 : 16),
             };
+        }
     }
 
     // ------------------------------------------------------------------
@@ -92,10 +95,6 @@ public class Chunk
 
     /// <summary>Returns the block at local coordinates (x, y, z).</summary>
     public ref Block GetBlock(int x, int y, int z) => ref _blocks[Index(x, y, z)];
-
-    /// <summary>Sets the Shape field on the block at local coordinates.  Used by SlopePlacer.</summary>
-    public void SetShape(int x, int y, int z, SlopeShape shape)
-        => _blocks[Index(x, y, z)].Shape = (byte)shape;
 
     /// <summary>Returns true when (x, y, z) is within [0, Size).</summary>
     public static bool InBounds(int x, int y, int z) =>
@@ -116,25 +115,25 @@ public class Chunk
     private const int BiomeSnowy = 4;
 
     /// <summary>
-    /// Computes the terrain surface height (in block Y) at the given world-space XZ
-    /// position using multi-octave Perlin noise.  Mountains receive an additional
-    /// ridge-boost when the base height exceeds mid-range.
+    /// Computes the terrain surface height as a float at the given world-space XZ
+    /// position using multi-octave Perlin noise. The integer part determines the
+    /// block Y, and the fractional part maps to 1–16 layers within the surface block.
     /// </summary>
-    private static int ComputeSurfaceY(float wx, float wz)
+    private static float ComputeSurfaceHeight(float wx, float wz)
     {
         // Base continent shape — 6 octaves for rich detail, coarse scale for wide features.
         float base_ = NoiseGenerator.Octave(wx * 0.018f, wz * 0.018f, octaves: 6);
         // Map [0,1] → [4,28]
-        int h = 4 + (int)(base_ * 24f);
+        float h = 4f + base_ * 24f;
 
         // Mountain ridge amplifier: only kicks in above mid-height.
-        if (h > 16)
+        if (h > 16f)
         {
             float ridge = NoiseGenerator.Octave(wx * 0.03f, wz * 0.03f, octaves: 4);
-            h += (int)(ridge * 6f);
+            h += ridge * 6f;
         }
 
-        return Math.Clamp(h, 2, Size - 2);
+        return Math.Clamp(h, 2f, Size - 2f);
     }
 
     /// <summary>
@@ -154,8 +153,9 @@ public class Chunk
     }
 
     /// <summary>
-    /// Generates realistic terrain: biome-based surface blocks, sea-level water,
-    /// sandy beaches, mountain peaks, cross-chunk oak trees, and ore clusters.
+    /// Generates realistic terrain: biome-based surface blocks with sub-block layer
+    /// precision, sea-level water, sandy beaches, mountain peaks, trees, and ores.
+    /// Surface blocks get a partial layer (1–16) based on noise for smooth terrain.
     /// </summary>
     private void Generate()
     {
@@ -164,8 +164,8 @@ public class Chunk
         // Only the Y=0 chunk layer contains terrain; higher layers start as all-air.
         if (Position.Y != 0) return;
 
-        // Pre-compute heightmap and biome map for all 32×32 columns.
-        var surfaceMap = new int[Size * Size];
+        // Pre-compute heightmap (float for sub-block precision) and biome map.
+        var surfaceHeights = new float[Size * Size];
         var biomeMap = new int[Size * Size];
 
         int startWx = Position.X * Size;
@@ -176,7 +176,7 @@ public class Chunk
             {
                 float wx = startWx + x;
                 float wz = startWz + z;
-                surfaceMap[x + z * Size] = ComputeSurfaceY(wx, wz);
+                surfaceHeights[x + z * Size] = ComputeSurfaceHeight(wx, wz);
                 biomeMap[x + z * Size] = ComputeBiome(wx, wz);
             }
 
@@ -184,7 +184,13 @@ public class Chunk
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
             {
-                int surfaceY = surfaceMap[x + z * Size];
+                float surfaceH = surfaceHeights[x + z * Size];
+                // Ceiling − 1 so an exact integer height (e.g. 6.0) places a
+                // full block at y=5 (Layer 16) instead of a tiny sliver at y=6.
+                int surfaceY = (int)MathF.Ceiling(surfaceH) - 1;
+                float frac = surfaceH - surfaceY;
+                byte surfaceLayer = (byte)Math.Clamp((int)MathF.Ceiling(frac * 16f), 1, 16);
+
                 int biome = biomeMap[x + z * Size];
 
                 // Beach override: within 2 blocks of sea level replace surface with sand.
@@ -199,19 +205,19 @@ public class Chunk
                     {
                         // Fill air below sea level with water.
                         b = y <= SeaLevel
-                            ? new Block { Id = 15, IsTransparent = true }   // Water
+                            ? new Block { Id = 15, IsTransparent = true, Layer = 16 }
                             : Block.Air;
                     }
                     else if (y == surfaceY)
                     {
                         b = biome switch
                         {
-                            BiomeDesert => new Block { Id = 5, IsTransparent = false }, // Sand
+                            BiomeDesert => new Block { Id = 5, IsTransparent = false, Layer = surfaceLayer },
                             BiomeMountains => surfaceY > 24
-                                ? new Block { Id = 16, IsTransparent = false }              // Snow cap
-                                : new Block { Id = 2, IsTransparent = false },             // Bare stone
-                            BiomeSnowy => new Block { Id = 16, IsTransparent = false }, // Snow
-                            _ => new Block { Id = 3, IsTransparent = false }, // Grass
+                                ? new Block { Id = 16, IsTransparent = false, Layer = surfaceLayer }
+                                : new Block { Id = 2, IsTransparent = false, Layer = surfaceLayer },
+                            BiomeSnowy => new Block { Id = 16, IsTransparent = false, Layer = surfaceLayer },
+                            _ => new Block { Id = 3, IsTransparent = false, Layer = surfaceLayer },
                         };
                     }
                     else if (y >= surfaceY - 3)
@@ -219,9 +225,9 @@ public class Chunk
                         // Sub-surface layer (3 blocks of fill beneath the top).
                         b = biome switch
                         {
-                            BiomeDesert => new Block { Id = 5, IsTransparent = false },  // Sand
-                            BiomeMountains => new Block { Id = 2, IsTransparent = false },  // Stone
-                            _ => new Block { Id = 1, IsTransparent = false },  // Dirt
+                            BiomeDesert => new Block { Id = 5, IsTransparent = false, Layer = 16 },
+                            BiomeMountains => new Block { Id = 2, IsTransparent = false, Layer = 16 },
+                            _ => new Block { Id = 1, IsTransparent = false, Layer = 16 },
                         };
                     }
                     else
@@ -234,40 +240,15 @@ public class Chunk
                         h ^= h >> 16;
 
                         if (y <= 12 && h % 130 == 0)
-                            b = new Block { Id = 14, IsTransparent = false }; // Iron Ore
+                            b = new Block { Id = 14, IsTransparent = false, Layer = 16 };
                         else if (y <= 18 && h % 70 == 0)
-                            b = new Block { Id = 13, IsTransparent = false }; // Coal Ore
+                            b = new Block { Id = 13, IsTransparent = false, Layer = 16 };
                         else
-                            b = new Block { Id = 2, IsTransparent = false }; // Stone
+                            b = new Block { Id = 2, IsTransparent = false, Layer = 16 };
                     }
 
                     _blocks[Index(x, y, z)] = b;
                 }
-            }
-
-        // Slope pass: classify surface blocks using ComputeSurfaceY for neighbors.
-        // ComputeSurfaceY is a pure noise function, so neighbor chunks never need to
-        // be loaded — slopes are fully determined at generation time from the same
-        // noise that produced the heightmap.
-        for (int z = 0; z < Size; z++)
-            for (int x = 0; x < Size; x++)
-            {
-                int surfaceY = surfaceMap[x + z * Size];
-                float wx = startWx + x;
-                float wz = startWz + z;
-
-                int hN = ComputeSurfaceY(wx, wz - 1);
-                int hS = ComputeSurfaceY(wx, wz + 1);
-                int hE = ComputeSurfaceY(wx + 1, wz);
-                int hW = ComputeSurfaceY(wx - 1, wz);
-                int hNE = ComputeSurfaceY(wx + 1, wz - 1);
-                int hNW = ComputeSurfaceY(wx - 1, wz - 1);
-                int hSE = ComputeSurfaceY(wx + 1, wz + 1);
-                int hSW = ComputeSurfaceY(wx - 1, wz + 1);
-
-                SlopeShape shape = ClassifySlope(surfaceY, hN, hS, hE, hW, hNE, hNW, hSE, hSW);
-                if (shape != SlopeShape.Cube)
-                    _blocks[Index(x, surfaceY, z)].Shape = (byte)shape;
             }
 
         // Place trees — scan an extended border region so trees whose trunks land
@@ -281,7 +262,7 @@ public class Chunk
                 int treeDensity = biome == BiomeForest ? 8 : 20;
                 if (!ShouldPlaceTree(tx, tz, treeDensity)) continue;
 
-                int sy = ComputeSurfaceY(tx, tz);
+                int sy = (int)MathF.Ceiling(ComputeSurfaceHeight(tx, tz)) - 1;
                 if (sy <= SeaLevel) continue; // no aquatic trees
 
                 PlaceTreeInChunk(tx, tz, sy);
@@ -310,18 +291,19 @@ public class Chunk
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
 
-        // Trunk: 4 log blocks directly above the surface.
-        for (int dy = 1; dy <= 4; dy++)
+        // Trunk: 4 log blocks starting at the surface block (one lower than above it)
+        // so partial-layer surfaces don't leave a visible gap.
+        for (int dy = 0; dy <= 3; dy++)
         {
             int ly = surfaceY + dy;
             if (InBounds(lx, ly, lz))
-                _blocks[Index(lx, ly, lz)] = new Block { Id = 7, IsTransparent = false }; // Oak Log
+                _blocks[Index(lx, ly, lz)] = new Block { Id = 7, IsTransparent = false, Layer = 16 };
         }
 
         // Leaf crown: 3×3 at trunk top − 1 and trunk top, plus single block above.
         for (int layer = 0; layer <= 2; layer++)
         {
-            int ly = surfaceY + 3 + layer;
+            int ly = surfaceY + 2 + layer;
             int radius = layer == 2 ? 0 : 1; // top layer is 1×1, lower two are 3×3
 
             for (int dz = -radius; dz <= radius; dz++)
@@ -333,7 +315,7 @@ public class Chunk
 
                     ref Block b = ref _blocks[Index(nx, ly, nz)];
                     if (b.Id == 0) // don't overwrite solid blocks
-                        b = new Block { Id = 8, IsTransparent = true }; // Oak Leaves
+                        b = new Block { Id = 8, IsTransparent = true, Layer = 16 };
                 }
         }
     }
@@ -351,71 +333,11 @@ public class Chunk
                 {
                     Block b;
                     if (y > grassY) b = Block.Air;
-                    else if (y == grassY) b = new Block { Id = 3, IsTransparent = false }; // Grass
-                    else if (y >= grassY - 3) b = new Block { Id = 1, IsTransparent = false }; // Dirt
-                    else b = new Block { Id = 2, IsTransparent = false }; // Stone
+                    else if (y == grassY) b = new Block { Id = 3, IsTransparent = false, Layer = 16 };
+                    else if (y >= grassY - 3) b = new Block { Id = 1, IsTransparent = false, Layer = 16 };
+                    else b = new Block { Id = 2, IsTransparent = false, Layer = 16 };
                     _blocks[Index(x, y, z)] = b;
                 }
-    }
-
-    // ------------------------------------------------------------------
-    // Slope classification
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Classifies the slope shape for a surface block at height <paramref name="h"/>
-    /// given the surface heights of its 8 neighbours.  Only 1-block drops are
-    /// considered; larger drops remain as Cube (cliff).
-    /// </summary>
-    private static SlopeShape ClassifySlope(
-        int h,
-        int hN, int hS, int hE, int hW,
-        int hNE, int hNW, int hSE, int hSW)
-    {
-        bool dropN = hN == h - 1;
-        bool dropS = hS == h - 1;
-        bool dropE = hE == h - 1;
-        bool dropW = hW == h - 1;
-
-        int cardinalDrops = (dropN ? 1 : 0) + (dropS ? 1 : 0)
-                          + (dropE ? 1 : 0) + (dropW ? 1 : 0);
-
-        if (cardinalDrops == 1)
-        {
-            if (dropN) return SlopeShape.RampN;
-            if (dropS) return SlopeShape.RampS;
-            if (dropE) return SlopeShape.RampE;
-            if (dropW) return SlopeShape.RampW;
-        }
-
-        if (cardinalDrops == 2)
-        {
-            if (dropN && dropE) return SlopeShape.OuterCornerNE;
-            if (dropN && dropW) return SlopeShape.OuterCornerNW;
-            if (dropS && dropE) return SlopeShape.OuterCornerSE;
-            if (dropS && dropW) return SlopeShape.OuterCornerSW;
-        }
-
-        if (cardinalDrops == 0)
-        {
-            bool dropNE = hNE == h - 1;
-            bool dropNW = hNW == h - 1;
-            bool dropSE = hSE == h - 1;
-            bool dropSW = hSW == h - 1;
-
-            int diagDrops = (dropNE ? 1 : 0) + (dropNW ? 1 : 0)
-                          + (dropSE ? 1 : 0) + (dropSW ? 1 : 0);
-
-            if (diagDrops == 1)
-            {
-                if (dropNE) return SlopeShape.InnerCornerNE;
-                if (dropNW) return SlopeShape.InnerCornerNW;
-                if (dropSE) return SlopeShape.InnerCornerSE;
-                if (dropSW) return SlopeShape.InnerCornerSW;
-            }
-        }
-
-        return SlopeShape.Cube;
     }
 
     // ------------------------------------------------------------------

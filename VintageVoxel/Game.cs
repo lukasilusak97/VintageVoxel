@@ -46,6 +46,7 @@ public class Game : GameWindow
     // Load-world list
     private List<WorldPersistence.WorldInfo> _worldList = new();
     private int _selectedWorldIndex = -1;
+    private bool _confirmDeleteWorld = false;
 
     private Player _player = new();
     private readonly InventoryWindow _inventoryWindow = new();
@@ -865,8 +866,47 @@ public class Game : GameWindow
 
         ImGui.SameLine();
 
+        if (!canLoad) ImGui.BeginDisabled();
+        if (ImGui.Button("Delete", new System.Numerics.Vector2(80f, 36f)) && canLoad)
+            _confirmDeleteWorld = true;
+        if (!canLoad) ImGui.EndDisabled();
+
+        ImGui.SameLine();
+
         if (ImGui.Button("Back", new System.Numerics.Vector2(80f, 36f)))
             _menuPage = MenuPage.Main;
+
+        // ── Delete confirmation popup ─────────────────────────────────────
+        if (_confirmDeleteWorld)
+            ImGui.OpenPopup("Delete World?");
+
+        if (ImGui.BeginPopupModal("Delete World?", ref _confirmDeleteWorld,
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
+        {
+            ImGui.Text($"Are you sure you want to delete");
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.4f, 0.4f, 1f),
+                _worldList[_selectedWorldIndex].DisplayName);
+            ImGui.Text("This cannot be undone.");
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+
+            if (ImGui.Button("Yes, Delete", new System.Numerics.Vector2(120f, 30f)))
+            {
+                WorldPersistence.DeleteWorld(_worldList[_selectedWorldIndex].SavePath);
+                _worldList.RemoveAt(_selectedWorldIndex);
+                _selectedWorldIndex = -1;
+                _confirmDeleteWorld = false;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel", new System.Numerics.Vector2(80f, 30f)))
+            {
+                _confirmDeleteWorld = false;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.EndPopup();
+        }
 
         ImGui.End();
     }
@@ -1047,7 +1087,7 @@ public class Game : GameWindow
 
         _gameClient.OnBlockUpdate += pkt =>
         {
-            var block = new Block { Id = pkt.BlockId, IsTransparent = BlockRegistry.IsTransparent(pkt.BlockId) };
+            var block = new Block { Id = pkt.BlockId, IsTransparent = BlockRegistry.IsTransparent(pkt.BlockId), Layer = (byte)(pkt.BlockId == 0 ? 0 : 16) };
             _world.SetBlock(pkt.BlockPos.X, pkt.BlockPos.Y, pkt.BlockPos.Z, block);
             LightEngine.UpdateAtBlock(pkt.BlockPos, _world);
             _worldRenderer.RebuildAffectedChunks(pkt.BlockPos);
