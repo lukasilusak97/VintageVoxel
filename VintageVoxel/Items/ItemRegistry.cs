@@ -62,8 +62,17 @@ public static class ItemRegistry
                 VSModelLoader.TryLoad(modelPath, out mesh);
             }
 
+            ToolDef? toolDef = null;
+            if (def.Tool != null)
+            {
+                toolDef = new ToolDef(
+                    def.Tool.Type ?? string.Empty,
+                    def.Tool.Capacity,
+                    def.Tool.TargetBlocks ?? Array.Empty<int>());
+            }
+
             _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.BlockId,
-                                      itemType, mesh, def.EntityId, modelRelPath);
+                                      itemType, mesh, def.EntityId, modelRelPath, toolDef);
         }
     }
 
@@ -91,5 +100,14 @@ public static class ItemRegistry
         public string? Model { get; set; }
         /// <summary>Entity ID to spawn when this item is placed (0 = not an entity item).</summary>
         public int EntityId { get; set; }
+        /// <summary>Optional tool definition for tool-type items.</summary>
+        public ToolDefDto? Tool { get; set; }
+    }
+
+    private sealed class ToolDefDto
+    {
+        public string? Type { get; set; }
+        public int Capacity { get; set; }
+        public int[]? TargetBlocks { get; set; }
     }
 }

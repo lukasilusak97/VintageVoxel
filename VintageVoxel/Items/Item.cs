@@ -54,10 +54,19 @@ public class Item
     /// </summary>
     public string? ModelPath { get; }
 
+    /// <summary>
+    /// Tool definition for tool-type items (shovel, pickaxe, axe, etc.).
+    /// <see langword="null"/> for non-tool items.
+    /// </summary>
+    public ToolDef? Tool { get; }
+
+    /// <summary>True when this item is a tool with an associated <see cref="ToolDef"/>.</summary>
+    public bool IsTool => Tool != null;
+
     public Item(int id, string name, int maxStackSize, int blockId = 0,
                 ItemType type = ItemType.Block,
                 ModelMesh? mesh = null, int entityId = 0,
-                string? modelPath = null)
+                string? modelPath = null, ToolDef? tool = null)
     {
         Id = id;
         Name = name;
@@ -67,5 +76,6 @@ public class Item
         Mesh = mesh;
         EntityId = entityId;
         ModelPath = modelPath;
+        Tool = tool;
     }
 }

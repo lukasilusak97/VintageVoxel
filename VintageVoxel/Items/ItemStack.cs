@@ -15,6 +15,13 @@ public struct ItemStack
     /// </summary>
     public int Count;
 
+    /// <summary>
+    /// Mutable runtime state for tool-type items (e.g. layers carried by a shovel).
+    /// <see langword="null"/> for non-tool items and empty slots.
+    /// Created lazily when a tool first picks up material.
+    /// </summary>
+    public ToolData? ToolState;
+
     /// <summary><see langword="true"/> when this slot holds no items.</summary>
     public readonly bool IsEmpty => Item == null || Count <= 0;
 
@@ -23,6 +30,7 @@ public struct ItemStack
     {
         Item = item;
         Count = count;
+        ToolState = item.IsTool ? new ToolData() : null;
     }
 
     /// <summary>Canonical empty-slot sentinel (same as <see langword="default"/>).</summary>

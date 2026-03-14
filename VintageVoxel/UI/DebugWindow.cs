@@ -25,7 +25,8 @@ public class DebugWindow
     /// </summary>
     public void Render(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode,
                      ItemStack heldItem, int hotbarSlot,
-                     DebugState debugState, string? saveStatus = null)
+                     DebugState debugState, World? world = null, Vector3? cameraPos = null, Vector3? cameraFront = null,
+                     string? saveStatus = null)
     {
         // Smooth FPS to stop the number flickering.
         _smoothFps = _smoothFps < 1f
@@ -82,6 +83,53 @@ public class DebugWindow
 
             RenderTimingsGraphs();
 
+            ImGui.Spacing();
+        }
+
+        // ---- Crosshair Block Info ----
+        if (world != null && cameraPos.HasValue && cameraFront.HasValue)
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Crosshair Block");
+            ImGui.Separator();
+
+            var hit = Raycaster.Cast(cameraPos.Value, cameraFront.Value, world);
+            if (hit.Hit)
+            {
+                var block = world.GetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z);
+                string name = BlockRegistry.GetName(block.Id);
+                ImGui.Text($"Block      : {name} (id={block.Id})");
+                ImGui.Text($"Position   : {hit.BlockPos.X}, {hit.BlockPos.Y}, {hit.BlockPos.Z}");
+                ImGui.Text($"Layer      : {block.Layer}/16  ({block.TopOffset:F3})");
+                ImGui.Text($"Partial    : {block.IsPartial}");
+                ImGui.Text($"Transparent: {block.IsTransparent}");
+                ImGui.Text($"WaterLevel : {block.WaterLevel}");
+                ImGui.Text($"Normal     : {hit.Normal.X}, {hit.Normal.Y}, {hit.Normal.Z}");
+            }
+            else
+            {
+                ImGui.TextDisabled("(no block in range)");
+            }
+
+            ImGui.Spacing();
+        }
+
+        // ---- Tool State ----
+        if (!heldItem.IsEmpty && heldItem.Item!.IsTool)
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Tool State");
+            ImGui.Separator();
+            ImGui.Text($"Tool Type  : {heldItem.Item.Tool!.Type}");
+            ImGui.Text($"Capacity   : {heldItem.Item.Tool.Capacity}");
+            if (heldItem.ToolState != null && !heldItem.ToolState.IsEmpty)
+            {
+                string carriedName = BlockRegistry.GetName(heldItem.ToolState.CarriedBlockId);
+                ImGui.Text($"Carrying   : {carriedName} (id={heldItem.ToolState.CarriedBlockId})");
+                ImGui.Text($"Layers     : {heldItem.ToolState.CarriedLayers}/{heldItem.Item.Tool.Capacity}");
+            }
+            else
+            {
+                ImGui.TextDisabled("(empty)");
+            }
             ImGui.Spacing();
         }
 

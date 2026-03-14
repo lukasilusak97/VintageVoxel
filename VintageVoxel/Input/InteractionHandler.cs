@@ -64,6 +64,13 @@ public sealed class InteractionHandler
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
+                // Tools handle their own left-click; never fall through to default break.
+                if (!_inventory.HeldStack.IsEmpty && _inventory.HeldStack.Item!.IsTool)
+                {
+                    TryToolLeftClick(hit.BlockPos);
+                    return;
+                }
+
                 ushort brokenId = _world.GetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z).Id;
                 _world.SetBlock(hit.BlockPos.X, hit.BlockPos.Y, hit.BlockPos.Z, Block.Air);
                 LightEngine.UpdateAtBlock(hit.BlockPos, _world);
@@ -81,6 +88,13 @@ public sealed class InteractionHandler
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
+                // Tools handle their own right-click; never fall through to PlaceHeldBlock.
+                if (!_inventory.HeldStack.IsEmpty && _inventory.HeldStack.Item!.IsTool)
+                {
+                    TryToolRightClick(hit.BlockPos, hit.Normal);
+                    return;
+                }
+
                 var place = hit.BlockPos + hit.Normal;
                 PlaceHeldBlock(place.X, place.Y, place.Z);
             }
@@ -117,6 +131,64 @@ public sealed class InteractionHandler
     {
         int count = WorldPersistence.SaveAll(_savePath, _world);
         return $"Saved {count} chunk(s) at {DateTime.Now:HH:mm:ss}";
+    }
+
+    // -------------------------------------------------------------------------
+    // Tool behavior helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Checks if the held item is a tool and delegates left-click to its behavior.
+    /// Returns true if the tool handled the interaction.
+    /// </summary>
+    private bool TryToolLeftClick(Vector3i hitPos)
+    {
+        ref var held = ref _inventory.HeldStack;
+        if (held.IsEmpty || held.Item?.Tool == null) return false;
+
+        var behavior = ToolBehaviorFactory.Get(held.Item.Tool.Type);
+        if (behavior == null) return false;
+
+        held.ToolState ??= new ToolData();
+
+        var ctx = new ToolContext
+        {
+            World = _world,
+            Renderer = _renderer,
+            HitPos = hitPos,
+            Normal = Vector3i.Zero,
+            ToolDef = held.Item.Tool,
+            ToolData = held.ToolState,
+        };
+
+        return behavior.OnLeftClick(ctx);
+    }
+
+    /// <summary>
+    /// Checks if the held item is a tool and delegates right-click to its behavior.
+    /// Returns true if the tool handled the interaction.
+    /// </summary>
+    private bool TryToolRightClick(Vector3i hitPos, Vector3i normal)
+    {
+        ref var held = ref _inventory.HeldStack;
+        if (held.IsEmpty || held.Item?.Tool == null) return false;
+
+        var behavior = ToolBehaviorFactory.Get(held.Item.Tool.Type);
+        if (behavior == null) return false;
+
+        held.ToolState ??= new ToolData();
+
+        var ctx = new ToolContext
+        {
+            World = _world,
+            Renderer = _renderer,
+            HitPos = hitPos,
+            Normal = normal,
+            ToolDef = held.Item.Tool,
+            ToolData = held.ToolState,
+        };
+
+        return behavior.OnRightClick(ctx);
     }
 
     // -------------------------------------------------------------------------

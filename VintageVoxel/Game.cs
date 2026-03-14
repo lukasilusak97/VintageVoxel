@@ -295,6 +295,9 @@ public class Game : GameWindow
                 heldItem: _player.Inventory.HeldStack,
                 hotbarSlot: _player.Inventory.SelectedSlot,
                 debugState: _debugState,
+                world: _world,
+                cameraPos: _camera.Position,
+                cameraFront: _camera.Front,
                 saveStatus: _lastSaveStatus);
         }
 
