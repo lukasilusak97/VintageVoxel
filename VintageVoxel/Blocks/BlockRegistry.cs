@@ -16,6 +16,7 @@ public static class BlockRegistry
     // face index → int[6] atlas tile index, indexed by block ID
     private static int[][] _faceTiles = Array.Empty<int[]>();
     private static bool[] _hasModel = Array.Empty<bool>();
+    private static string?[] _modelNames = Array.Empty<string?>();
     private static BlockDef[] _defs = Array.Empty<BlockDef>();
 
     // ------------------------------------------------------------------
@@ -121,6 +122,7 @@ public static class BlockRegistry
             _faceTiles[i] = new int[6]; // default: tile 0 for every face
 
         _hasModel = new bool[maxId + 1];
+        _modelNames = new string?[maxId + 1];
         foreach (var def in _defs)
         {
             var tiles = new int[6];
@@ -131,6 +133,7 @@ public static class BlockRegistry
             }
             _faceTiles[def.Id] = tiles;
             _hasModel[def.Id] = !string.IsNullOrEmpty(def.Model);
+            _modelNames[def.Id] = def.Model;
         }
     }
 
@@ -152,6 +155,13 @@ public static class BlockRegistry
     public static bool HasModel(ushort blockId)
     {
         return blockId > 0 && blockId < _hasModel.Length && _hasModel[blockId];
+    }
+
+    /// <summary>Returns <see langword="true"/> if the block uses the X-face (cross) model rendered inline in the chunk mesh.</summary>
+    public static bool IsCrossModel(ushort blockId)
+    {
+        if (blockId == 0 || blockId >= _modelNames.Length) return false;
+        return string.Equals(_modelNames[blockId], "x_face", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Returns <see langword="true"/> if the block with the given ID is transparent.</summary>

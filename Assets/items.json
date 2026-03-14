@@ -19,5 +19,6 @@
     { "id": 21, "name": "Buggie Wheel", "maxStackSize": 4, "entityId": 2 },
     { "id": 18, "name": "Shovel", "maxStackSize": 1, "model": "item/shovel" },
     { "id": 19, "name": "Axe", "maxStackSize": 1, "model": "item/axe" },
-    { "id": 20, "name": "Pickaxe", "maxStackSize": 1, "model": "item/pickaxe" }
+    { "id": 20, "name": "Pickaxe", "maxStackSize": 1, "model": "item/pickaxe" },
+    { "id": 46, "name": "Short Grass", "maxStackSize": 64, "blockId": 46 }
 ]

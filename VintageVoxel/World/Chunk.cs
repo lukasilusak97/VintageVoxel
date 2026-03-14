@@ -481,6 +481,48 @@ public class Chunk
                 }
             }
 
+        // Place short grass on grass-surface blocks.
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int colIdx = x + z * Size;
+                float surfaceH = surfaceHeights[colIdx];
+                int surfaceY = (int)MathF.Ceiling(surfaceH) - 1;
+                int biome = biomeMap[colIdx];
+
+                // Skip biomes that don't have grass surfaces.
+                if (biome == BiomeDesert || biome == BiomeSnowy) continue;
+                if (biome == BiomeMountains && surfaceY > 140) continue;
+
+                // Skip underwater or beach columns.
+                bool underwater = surfaceY < SeaLevel;
+                bool isBeach = Math.Abs(surfaceY - SeaLevel) <= 2 && biome != BiomeMountains;
+                if (underwater || isBeach) continue;
+
+                // Skip settlements.
+                var zone = settlementZones[colIdx];
+                if (zone != SettlementMap.ZoneType.None) continue;
+
+                int grassLy = (surfaceY + 1) - chunkWorldYMin;
+                if (grassLy < 0 || grassLy >= Size) continue;
+
+                // Deterministic hash for placement probability.
+                uint gh = HashWorldPos(startWx + x, startWz + z);
+                if (gh % 4 != 0) continue; // ~25% coverage
+
+                // Store the surface block's layer so the cross model aligns
+                // with the actual partial-block surface height.
+                float frac = surfaceH - surfaceY;
+                byte surfaceLayer = (byte)Math.Clamp((int)MathF.Ceiling(frac * 16f), 1, 16);
+
+                _blocks[Index(x, grassLy, z)] = new Block
+                {
+                    Id = 46,
+                    IsTransparent = true,
+                    Layer = surfaceLayer
+                };
+            }
+
         // Place trees.
         const int border = 4;
         // Skip tree placement entirely for chunks whose Y range cannot contain any

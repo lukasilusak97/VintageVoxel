@@ -24,6 +24,7 @@ int padIdx(int x, int y, int z) {
 //   bits [25:21] = waterLevel (0-16)
 //   bit  [26]    = isTransparent
 //   bit  [27]    = hasModel
+//   bit  [28]    = isCrossModel
 layout(std430, binding = 0) readonly buffer BlockBuf { uint blockData[]; };
 
 // Light data in padded 34^3 volume.
@@ -69,6 +70,7 @@ uint  bLayer(uint p)        { return (p >> 16) & 0x1Fu; }
 uint  bWater(uint p)        { return (p >> 21) & 0x1Fu; }
 bool  bTransp(uint p)       { return (p & (1u << 26)) != 0u; }
 bool  bHasModel(uint p)     { return (p & (1u << 27)) != 0u; }
+bool  bIsCross(uint p)      { return (p & (1u << 28)) != 0u; }
 bool  bEmpty(uint p)        { return bId(p) == 0u; }
 bool  bPartial(uint p)      { uint l = bLayer(p); return l > 0u && l < 16u; }
 bool  bFull(uint p)         { return bLayer(p) >= 16u; }
@@ -389,6 +391,65 @@ void emitWaterFace(int face,
 }
 
 // -----------------------------------------------------------------------
+// Emit cross-model (X-face) block -- two diagonal quads, each double-sided
+// -----------------------------------------------------------------------
+void emitCrossQuad(float x0, float y0, float z0,
+                   float x1, float y1, float z1,
+                   float x2, float y2, float z2,
+                   float x3, float y3, float z3,
+                   float u0, float u1,
+                   float sun, float blk, float ao)
+{
+    uint vOff = atomicAdd(oVertCnt, 4u);
+    uint iOff = atomicAdd(oIdxCnt, 6u);
+    if (vOff + 4u > uMaxVerts || iOff + 6u > uMaxIdx) return;
+
+    writeVertex(0, vOff,      x0, y0, z0, u0, 1.0, sun, blk, ao);
+    writeVertex(0, vOff + 1u, x1, y1, z1, u0, 0.0, sun, blk, ao);
+    writeVertex(0, vOff + 2u, x2, y2, z2, u1, 0.0, sun, blk, ao);
+    writeVertex(0, vOff + 3u, x3, y3, z3, u1, 1.0, sun, blk, ao);
+
+    oIdx[iOff     ] = vOff;
+    oIdx[iOff + 1u] = vOff + 1u;
+    oIdx[iOff + 2u] = vOff + 2u;
+    oIdx[iOff + 3u] = vOff;
+    oIdx[iOff + 4u] = vOff + 2u;
+    oIdx[iOff + 5u] = vOff + 3u;
+}
+
+void emitCrossBlock(int px, int py, int pz,
+                    float bx, float by, float bz,
+                    uint blockId, float topOff)
+{
+    uint tileIdx = regTile(blockId, 0);
+    float u0 = float(tileIdx) * uTileUvWidth;
+    float u1 = float(tileIdx + 1u) * uTileUvWidth;
+
+    // Sample light at the block position
+    float rawSun = sunAt(padIdx(px, py, pz));
+    float rawBlk = blkAt(padIdx(px, py, pz));
+    float sun = rawSun * 0.80;
+    float blk = rawBlk;
+    float ao = 1.0;
+
+    float x0 = bx;       float x1 = bx + 1.0;
+    float y0 = by + topOff - 1.0;  // align bottom with the surface block's top
+    float y1 = y0 + 1.0;
+    float z0 = bz;       float z1 = bz + 1.0;
+
+    // Diagonal 1: NW-bottom to SE-top (front + back)
+    emitCrossQuad(x0, y0, z0,  x0, y1, z0,  x1, y1, z1,  x1, y0, z1,
+                  u0, u1, sun, blk, ao);
+    emitCrossQuad(x1, y0, z1,  x1, y1, z1,  x0, y1, z0,  x0, y0, z0,
+                  u0, u1, sun, blk, ao);
+    // Diagonal 2: NE-bottom to SW-top (front + back)
+    emitCrossQuad(x1, y0, z0,  x1, y1, z0,  x0, y1, z1,  x0, y0, z1,
+                  u0, u1, sun, blk, ao);
+    emitCrossQuad(x0, y0, z1,  x0, y1, z1,  x1, y1, z0,  x1, y0, z0,
+                  u0, u1, sun, blk, ao);
+}
+
+// -----------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------
 void main() {
@@ -409,7 +470,11 @@ void main() {
     bool empty = bEmpty(blk);
     bool water = bHasWater(blk);
     if (empty && !water) return;
-    if (!empty && bHasModel(blk)) return;
+    if (!empty && bHasModel(blk) && !bIsCross(blk)) return;
+    if (!empty && bIsCross(blk)) {
+        emitCrossBlock(px, py, pz, float(lx), float(ly), float(lz), bId(blk), bTopOff(blk));
+        return;
+    }
 
     bool hasTerrain = !empty;
     bool partial = bPartial(blk);

@@ -182,7 +182,8 @@ public sealed class ComputeMesher : IDisposable
                         | ((uint)Math.Min((int)block.Layer, 16) << 16)
                         | ((uint)Math.Min((int)block.WaterLevel, 16) << 21)
                         | (block.IsTransparent ? (1u << 26) : 0u)
-                        | (BlockRegistry.HasModel(block.Id) ? (1u << 27) : 0u);
+                        | (BlockRegistry.HasModel(block.Id) ? (1u << 27) : 0u)
+                        | (BlockRegistry.IsCrossModel(block.Id) ? (1u << 28) : 0u);
                     _blockBuf[padIdx] = packed;
 
                     // Pack light data: sun in bits [3:0], block in bits [7:4].
@@ -207,6 +208,7 @@ public sealed class ComputeMesher : IDisposable
             uint flags = 0;
             if (BlockRegistry.IsTransparent(uid)) flags |= 1;
             if (BlockRegistry.HasModel(uid)) flags |= 2;
+            if (BlockRegistry.IsCrossModel(uid)) flags |= 4;
             buf[id * RegStride + 6] = flags;
         }
         return buf;

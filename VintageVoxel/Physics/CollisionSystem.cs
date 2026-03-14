@@ -26,6 +26,7 @@ public static class CollisionSystem
         {
             Block block = world.GetBlock(bx, by, bz);
             if (block.IsEmpty) continue;
+            if (BlockRegistry.IsCrossModel(block.Id)) continue;
 
             return by + block.TopOffset;
         }
@@ -58,6 +59,7 @@ public static class CollisionSystem
                 {
                     Block block = world.GetBlock(x, y, z);
                     if (block.IsEmpty) continue;
+                    if (BlockRegistry.IsCrossModel(block.Id)) continue;
 
                     if (block.IsPartial)
                     {
@@ -99,6 +101,7 @@ public static class CollisionSystem
                 {
                     Block block = world.GetBlock(x, y, z);
                     if (block.IsEmpty) continue;
+                    if (BlockRegistry.IsCrossModel(block.Id)) continue;
 
                     float surface = y + block.TopOffset;
                     if (surface > feetY && surface <= feetY + maxStepHeight && surface > targetSurface)

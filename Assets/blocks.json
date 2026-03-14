@@ -340,5 +340,13 @@
         "id": 45,
         "name": "Polished Andesite",
         "textures": { "all": "polished_andesite" }
+    },
+    {
+        "id": 46,
+        "name": "Short Grass",
+        "transparent": true,
+        "model": "x_face",
+        "tint": "#59AE30",
+        "textures": { "all": "short_grass" }
     }
 ]

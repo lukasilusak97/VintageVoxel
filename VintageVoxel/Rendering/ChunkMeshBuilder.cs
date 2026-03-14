@@ -151,7 +151,11 @@ public static class ChunkMeshBuilder
                     if (block.IsEmpty && !block.HasWater)
                         continue;
                     if (block.Id != 0 && BlockRegistry.HasModel(block.Id))
+                    {
+                        if (BlockRegistry.IsCrossModel(block.Id))
+                            EmitCrossBlock(verts, indices, x, y, z, block, chunk, world);
                         continue;
+                    }
 
                     bool hasTerrain = block.Id != 0;
                     bool hasWater = block.HasWater;
@@ -366,6 +370,73 @@ public static class ChunkMeshBuilder
             indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
             indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-model (X-face) emission
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Emits two diagonal quads forming an X shape, each double-sided.
+    /// Used for vegetation blocks like short grass. Uses the block's atlas
+    /// texture (face 0) and samples light at the block's own position.
+    /// </summary>
+    private static void EmitCrossBlock(
+        List<float> verts, List<uint> indices,
+        int bx, int by, int bz, Block block,
+        Chunk chunk, World? world)
+    {
+        float topOffset = block.TopOffset;
+        float x0 = bx, x1 = bx + 1f;
+        float y0 = by, y1 = by + topOffset;
+        float z0 = bz, z1 = bz + 1f;
+
+        int tileIdx = BlockRegistry.TileForFace(block.Id, 0);
+        float u0 = tileIdx * TextureAtlas.TileUvWidth;
+        float u1 = (tileIdx + 1) * TextureAtlas.TileUvWidth;
+
+        // Sample light at the block's own position.
+        GetLightAt(bx, by, bz, chunk, world, out float rawSun, out float rawBlk);
+        float sun = rawSun * 0.80f;
+        float blk = rawBlk;
+        const float ao = 1.0f;
+
+        // Quad 1: NW-bottom to SE-top diagonal
+        EmitCrossQuad(verts, indices,
+            x0, y0, z0, x0, y1, z0, x1, y1, z1, x1, y0, z1,
+            u0, u1, sun, blk, ao);
+        // Quad 1 back face
+        EmitCrossQuad(verts, indices,
+            x1, y0, z1, x1, y1, z1, x0, y1, z0, x0, y0, z0,
+            u0, u1, sun, blk, ao);
+        // Quad 2: NE-bottom to SW-top diagonal
+        EmitCrossQuad(verts, indices,
+            x1, y0, z0, x1, y1, z0, x0, y1, z1, x0, y0, z1,
+            u0, u1, sun, blk, ao);
+        // Quad 2 back face
+        EmitCrossQuad(verts, indices,
+            x0, y0, z1, x0, y1, z1, x1, y1, z0, x1, y0, z0,
+            u0, u1, sun, blk, ao);
+    }
+
+    private static void EmitCrossQuad(
+        List<float> verts, List<uint> indices,
+        float x0, float y0, float z0,
+        float x1, float y1, float z1,
+        float x2, float y2, float z2,
+        float x3, float y3, float z3,
+        float u0, float u1,
+        float sun, float blk, float ao)
+    {
+        uint baseIdx = (uint)(verts.Count / 8);
+
+        AddV(verts, x0, y0, z0, u0, 1f, sun, blk, ao);
+        AddV(verts, x1, y1, z1, u0, 0f, sun, blk, ao);
+        AddV(verts, x2, y2, z2, u1, 0f, sun, blk, ao);
+        AddV(verts, x3, y3, z3, u1, 1f, sun, blk, ao);
+
+        indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
+        indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
     }
 
     // -----------------------------------------------------------------------
