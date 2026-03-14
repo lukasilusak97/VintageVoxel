@@ -1,73 +1,74 @@
-However, **you must be very careful with AI agents here.** Because Bepu v2 is fundamentally different from traditional Object-Oriented physics engines (like Unity's PhysX or Bepu v1), AI will frequently hallucinate and try to give you `class RigidBody` or Bepu v1 code. Bepu v2 uses `structs`, `Handles`, `BufferPools`, and `System.Numerics`. 
+### Phase 1: Direct JSON Conversion (Do this first)
+**Prompt to AI:**
+> "I have 7 Minecraft Java `.json` block/item models that I need converted to the Vintage Story `.json` shape format. I do not want a script; I want you to directly convert them and give me the updated JSON code for each.
+> 
+> Here are the rules for the conversion:
+> 1. **Hierarchy:** Wrap the flat MC `elements` array inside a root element, or just leave them as a flat array (VS supports both).
+> 2. **Coordinates:** Map MC `from` and `to` directly to VS `from` and `to`.
+> 3. **Rotations:** MC defines rotation as an object with `origin[3]`, `axis` (x, y, or z), and `angle`. 
+>    - Map MC `origin` to VS `rotationOrigin`.
+>    - Map the MC `angle` to VS `rotationX`, `rotationY`, or `rotationZ` based on the specified MC `axis`. 
+> 4. **Faces:** Map MC `faces` to VS `faces`. Ensure the `uv` array and `texture` string references are kept.
+> 
+> Here are the 7 models: 
+> `[Paste the contents of your 7 Minecraft JSON files here]`"
 
-Here is the updated, highly-specific master plan to feed your AI agent. **Give the AI the "Strict Rules" section first.**
+### Phase 2: Refactoring Internal Data Structures
+**Prompt to AI:**
+> "Now we need to update the engine. Review my current engine code for the Minecraft model data structures. We are replacing them with Vintage Story (VS) model data structures.
+> 
+> Refactor or replace the existing model structs/classes to support the following VS schema:
+> - `VSModel`: Root struct containing texture mappings, an array of root `VSElement`s, and an array of `VSAnimation`s.
+> - `VSElement`: Must support hierarchy. Needs `name`, `from[3]`, `to[3]`, `rotationOrigin[3]`, `rotationX`, `rotationY`, `rotationZ`, a dictionary of `VSFace`s, and an array of `children` (which are also `VSElement`s).
+> - `VSAnimation`: Contains `name` and an array of `VSKeyFrame`s.
+> - `VSKeyFrame`: Contains a `frame` float, and a dictionary of `ElementTransforms` (position and rotation offsets for specific element names).
+> Remove all old MC-specific struct fields (like `axis`-based rotations)."
 
----
+### Phase 3: Writing the VS JSON Deserializer
+**Prompt to AI:**
+> "Update the JSON parsing system to load the new `VSModel` structures instead of the old MC ones.
+> 
+> Requirements:
+> 1. Write a recursive parsing function to handle `VSElement`s, because in VS, elements can have `children` arrays infinitely deep.
+> 2. Safely handle optional fields. In VS JSON, if `rotationX/Y/Z` or `rotationOrigin` are missing, default them to `0.0`.
+> 3. Ensure texture string resolutions handle the VS syntax (which often maps texture codes directly to the faces)."
 
-### ⚠️ Prerequisite Prompt: The Strict Rules for the AI
-**Feed this to the AI before anything else to set the correct context:**
-> "I am building a C# custom voxel engine using OpenTK and **BepuPhysics v2** (NOT v1). 
-> **Strict Rules for BepuPhysics v2:**
-> 1. Bepu v2 is Data-Oriented. Do not invent `RigidBody` classes. You must use `Simulation`, `BodyHandle`, `StaticHandle`, `BodyReference`, and `BufferPool`.
-> 2. OpenTK uses `OpenTK.Mathematics.Vector3`, but Bepu v2 natively uses `System.Numerics.Vector3`. Write explicit conversion extensions between the two to avoid compilation errors.
-> 3. Avoid Garbage Collection (GC) allocations in the physics update loop. Use structs, `ref` parameters, and arrays/pools where necessary.
-> 4. The voxel grid has 16 horizontal layers per standard block (vertical scale is 1/16th of horizontal scale). The engine features caves, so we are working in true 3D."
+### Phase 4: Implementing Hierarchical Transform Math
+**Prompt to AI:**
+> "Rewrite the matrix transformation logic for the model elements. Since VS elements have parents, we can no longer use flat MC transform logic.
+> 
+> Create a recursive `CalculateTransform` function for `VSElement` that does the following in order:
+> 1. Start with an identity matrix.
+> 2. Translate to `rotationOrigin`.
+> 3. Apply rotations (`rotationZ`, then `rotationY`, then `rotationX` — convert degrees to radians).
+> 4. Translate back (negative `rotationOrigin`).
+> 5. Multiply this local matrix by the `parentTransform` matrix passed into the function.
+> 6. Recursively call this on all `children`, passing the newly calculated matrix as the new parent transform."
 
----
+### Phase 5: Updating the Mesh Generator
+**Prompt to AI:**
+> "Update the mesh generation step (where we create the vertex, normal, and UV buffers).
+> 
+> 1. Iterate through the root `VSElement`s and their `children` recursively.
+> 2. For every `VSFace` defined on an element, generate the two triangles (4 vertices).
+> 3. Apply the correct Global Transform Matrix (calculated in the previous step) to the vertex positions and normals.
+> 4. Normalize the coordinates by dividing the `from` and `to` positions by 16.0 (since both MC and VS use a 16-unit voxel scale).
+> 5. Ensure the UV mappings match the new texture atlas logic."
 
-### Phase 1: The Voxel Query Interface (C# Setup)
-**Prompt for the AI Agent:**
-> "Create a `VoxelPhysicsQuery` interface in C#. 
-> 1. Implement a method `bool IsSolid(System.Numerics.Vector3 worldPosition)` that converts a continuous world coordinate into my 16-layer block coordinate system and returns true if it hits solid voxel data.
-> 2. Ensure the math correctly handles negative coordinates. 
-> 3. Provide a static helper class `MathConversions` to easily cast `OpenTK.Mathematics.Vector3` to `System.Numerics.Vector3` and vice versa."
+### Phase 6: Implementing Native Keyframe Animations
+**Prompt to AI:**
+> "Implement a new animation controller for the VS models.
+> 
+> 1. Create a function that takes a `VSAnimation`, a current `time/frame`, and an `ElementTree`.
+> 2. Find the two adjacent `VSKeyFrame`s based on the current time.
+> 3. Use `Lerp` for position offsets and `Slerp` for rotation offsets to interpolate between the keyframes.
+> 4. Inject these animated offsets into the `CalculateTransform` logic from Phase 4. The animated translation/rotation must be applied *relative to the rotationOrigin* and *before* the parent matrix is multiplied."
 
-### Phase 2: The "Moving Window" Collision Generator (Bepu v2 Statics)
-**Prompt for the AI Agent:**
-> "Using the `VoxelPhysicsQuery`, create a `VoxelCollisionWindow` class for BepuPhysics v2. 
-> 1. It will take the vehicle's `System.Numerics.Vector3` center position and scan a 3D radius (e.g., 3 blocks).
-> 2. For every solid 1/16th layer block found, it needs to represent a physics Box.
-> 3. **Crucial Bepu v2 optimization:** Do NOT constantly `Simulation.Statics.Add` and `Remove` every frame, as this is slow. Instead, maintain a fixed-size Object Pool of `StaticHandle`s. 
-> 4. Allocate a generic 1/16th block `Box` shape in `Simulation.Shapes` once. 
-> 5. Update the `Simulation.Statics.GetStaticReference(handle).Pose` to move the pooled statics to the solid voxel positions around the car. Move unused statics far underground (e.g., Y = -9999) to 'hide' them."
-
-### Phase 3: The 3D DDA Raycaster (Pure C# Voxel Math)
-**Prompt for the AI Agent:**
-> "Implement a 3D DDA (Digital Differential Analyzer) Raycast algorithm purely in C# for the wheels.
-> 1. Signature: `bool Raycast(System.Numerics.Vector3 origin, System.Numerics.Vector3 direction, float maxDistance, out System.Numerics.Vector3 hitPoint, out System.Numerics.Vector3 normal)`.
-> 2. The ray must step through the 3D voxel grid utilizing `VoxelPhysicsQuery.IsSolid`. 
-> 3. Because my blocks have 16 layers, the vertical step increments must be 1/16th of the horizontal step increments. 
-> 4. Do not use Bepu's internal raycaster for this; query the voxel data directly to avoid snagging on the AABBs generated in Phase 2."
-
-### Phase 4: The Bepu v2 Vehicle Chassis (The Rigid Body)
-**Prompt for the AI Agent:**
-> "Create a `VehicleChassis` class managed by Bepu v2. 
-> 1. Create a dynamic body using `BodyDescription.CreateDynamic(...)`. The shape should be a `Box` (e.g., 2m x 1m x 4m) added to `Simulation.Shapes`.
-> 2. Calculate the inertia tensor using `shape.ComputeInertia(mass)`.
-> 3. Store the resulting `BodyHandle`. Provide a getter property that returns the `BodyReference` using `Simulation.Bodies.GetBodyReference(handle)` so we can easily read its `Pose` and `Velocity` in the update loop.
-> 4. Hook up the `VoxelCollisionWindow` (from Phase 2) to update its pooled statics around the `BodyReference.Pose.Position` every frame."
-
-### Phase 5: Bepu v2 Raycast Suspension (The Hover Springs)
-**Prompt for the AI Agent:**
-> "Implement the `RaycastSuspension` system. 
-> 1. Define 4 wheel attachment points as local `System.Numerics.Vector3` offsets from the chassis center.
-> 2. Every physics tick, get the `BodyReference`. Convert the local attachment points to world space using the body's `Pose`.
-> 3. Cast a ray straight down (relative to the body's orientation) using the Custom 3D DDA Raycast.
-> 4. If it hits the ground within `SuspensionLength`, calculate the spring force: 
->    `Force = (RestLength - HitDistance) * SpringStiffness - (VerticalVelocityAtWheel * Damping)`.
-> 5. Apply this force upward using Bepu v2's `BodyReference.ApplyImpulse(impulse, offsetFromCenterOfMass)`. Remember that Bepu uses Impulses (Force * dt), so multiply the calculated force by `dt` before applying."
-
-### Phase 6: Controls & OpenTK Integration
-**Prompt for the AI Agent:**
-> "Add OpenTK keyboard input integration to drive the Bepu v2 `VehicleChassis`.
-> 1. Check OpenTK's `KeyboardState` for W/A/S/D.
-> 2. **Acceleration:** If the DDA raycasts detect the wheels are on the ground, apply a forward impulse using `BodyReference.ApplyImpulse` at the wheel offsets along the local forward vector.
-> 3. **Steering:** Rotate the local forward vector of the front wheels before applying drive forces, or apply a gentle `ApplyAngularImpulse` to the `BodyReference` to turn the chassis.
-> 4. **Friction/Grip:** Calculate the lateral (sideways) velocity at each wheel offset. Apply an opposing impulse to cancel out sliding, ensuring the car grips the voxel surface instead of sliding like it's on ice."
-
----
-
-### Pro-Tip for BepuPhysics v2
-In Bepu v2, updating collision poses (like you will do in Phase 2) happens via `StaticReference`. 
-If the AI struggles with Phase 2, remind it: 
-> *"To move a static box, get its reference via `Simulation.Statics.GetStaticReference(handle)` and update its `Pose` property directly. Because it is a struct reference, Bepu handles the broad-phase update automatically."*
+### Phase 7: Engine Clean-Up & Integration
+**Prompt to AI:**
+> "Now, trace through the rest of the codebase and replace all instantiations of the old Minecraft model loader with our new Vintage Story model loader.
+> 
+> 1. Fix any broken references in the entity rendering loop.
+> 2. Hook up the game engine's `DeltaTime` to the new animation controller so the models animate over time.
+> 3. Ensure the asset pipeline is now exclusively loading the 7 new VS JSON files we created earlier.
+> 4. Delete any remaining legacy Minecraft model-loading code."

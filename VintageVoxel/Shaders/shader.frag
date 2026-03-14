@@ -26,8 +26,8 @@ const vec3  SunColor    = vec3(0.95, 0.98, 1.00);
 const vec3  BlockColor  = vec3(1.00, 0.68, 0.26);
 // Horizon fog: hazy pale-blue sky.
 const vec3  FogColor    = vec3(0.58, 0.72, 0.86);
-// Minimum ambient so caves are never pitch-black.
-const float Ambient     = 0.042;
+// Minimum ambient so fully unlit areas still show faint detail.
+const float Ambient     = 0.005;
 
 // ---------------------------------------------------------------------------
 // Helpers

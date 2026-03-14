@@ -170,7 +170,7 @@ public static class LightEngine
 
                 for (int y = Chunk.Size - 1; y >= 0; y--)
                 {
-                    if (!chunk.GetBlock(x, y, z).IsTransparent) break;
+                    if (chunk.GetBlock(x, y, z).IsFullBlock) break;
 
                     int idx = Chunk.Index(x, y, z);
                     chunk.SunLight[idx] = MaxSunLight;
@@ -180,8 +180,10 @@ public static class LightEngine
     }
 
     /// <summary>
-    /// Returns true when any loaded chunk above this column contains a solid block,
-    /// meaning no sunlight can reach this (x,z) column from the sky.
+    /// Returns true when any loaded chunk above this column contains a full block
+    /// (opaque OR transparent-but-solid, e.g. leaves), meaning direct sky sunlight
+    /// cannot reach this (x,z) column.  Light may still leak through via BFS with
+    /// per-step decay.
     /// </summary>
     private static bool IsColumnBlockedAbove(Chunk chunk, World world, int x, int z)
     {
@@ -190,7 +192,7 @@ public static class LightEngine
             var key = new Vector3i(chunk.Position.X, cy, chunk.Position.Z);
             if (!world.Chunks.TryGetValue(key, out var above)) continue;
             for (int ay = 0; ay < Chunk.Size; ay++)
-                if (!above.GetBlock(x, ay, z).IsTransparent) return true;
+                if (above.GetBlock(x, ay, z).IsFullBlock) return true;
         }
         return false;
     }
