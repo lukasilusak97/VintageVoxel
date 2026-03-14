@@ -23,14 +23,6 @@ public class DebugWindow
     /// Renders the debug overlay window. Call each frame between
     /// ImGuiController.Update() and ImGuiController.Render().
     /// </summary>
-    /// <param name="fps">Raw frames-per-second this frame.</param>
-    /// <param name="frameTimeMs">Raw frame time in milliseconds.</param>
-    /// <param name="playerPos">Current camera / player world position.</param>
-    /// <param name="chunksLoaded">Number of chunks currently in GPU memory.</param>
-    /// <param name="creativeMode">Whether creative / fly mode is active.</param>
-    /// <param name="heldItem">The <see cref="ItemStack"/> in the selected hotbar slot.</param>
-    /// <param name="hotbarSlot">Index of the currently selected hotbar slot (0-based).</param>
-    /// <param name="saveStatus">Optional last save / load status line shown in the overlay.</param>
     public void Render(float fps, float frameTimeMs, Vector3 playerPos, int chunksLoaded, bool creativeMode,
                      ItemStack heldItem, int hotbarSlot,
                      DebugState debugState, string? saveStatus = null)
@@ -65,6 +57,11 @@ public class DebugWindow
 
         ImGui.Spacing();
 
+        // ---- FPS & Frame Time graphs ----
+        RenderPerformanceGraphs();
+
+        ImGui.Spacing();
+
         // ---- Toggles ----
         ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Toggles");
         ImGui.Separator();
@@ -77,89 +74,14 @@ public class DebugWindow
 
         ImGui.Spacing();
 
-        // ---- Profiler timings bar chart ----
+        // ---- Profiler section timing graphs ----
         if (Profiler.Sections.Count > 0)
         {
             ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Timings");
             ImGui.Separator();
 
-            // Scale: bars fill at 16 ms (one 60 fps frame budget).
-            const double barBudgetMs = 16.0;
-            float barWidth = 180f;
-            float barHeight = 14f;
+            RenderTimingsGraphs();
 
-            var drawList = ImGui.GetWindowDrawList();
-
-            foreach (var name in Profiler.Sections)
-            {
-                double ms = Profiler.GetMs(name);
-                double rawMs = Profiler.GetRawMs(name);
-                double peakMs = Profiler.GetPeakMs(name);
-
-                float fraction = (float)Math.Min(ms / barBudgetMs, 1.0);
-                float rawFraction = (float)Math.Min(rawMs / barBudgetMs, 1.0);
-                float peakFraction = (float)Math.Min(peakMs / barBudgetMs, 1.0);
-
-                // Smoothed bar colour: green < 1 ms, yellow < 5 ms, red >= 5 ms.
-                uint barColour = ms < 1.0
-                    ? ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.2f, 0.85f, 0.2f, 0.9f))
-                    : ms < 5.0
-                        ? ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.95f, 0.8f, 0.1f, 0.9f))
-                        : ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.95f, 0.25f, 0.25f, 0.9f));
-
-                // Raw bar: slightly transparent version of the same colour
-                uint rawColour = ms < 1.0
-                    ? ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.2f, 0.85f, 0.2f, 0.35f))
-                    : ms < 5.0
-                        ? ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.95f, 0.8f, 0.1f, 0.35f))
-                        : ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.95f, 0.25f, 0.25f, 0.35f));
-
-                var cursor = ImGui.GetCursorScreenPos();
-
-                // Background track
-                drawList.AddRectFilled(
-                    cursor,
-                    new System.Numerics.Vector2(cursor.X + barWidth, cursor.Y + barHeight),
-                    ImGui.ColorConvertFloat4ToU32(new System.Numerics.Vector4(0.15f, 0.15f, 0.15f, 0.8f)));
-
-                // Raw last-frame bar (dim, behind smoothed bar — reveals spikes)
-                if (rawFraction > 0f)
-                    drawList.AddRectFilled(
-                        cursor,
-                        new System.Numerics.Vector2(cursor.X + barWidth * rawFraction, cursor.Y + barHeight),
-                        rawColour);
-
-                // Smoothed bar (solid, on top)
-                if (fraction > 0f)
-                    drawList.AddRectFilled(
-                        cursor,
-                        new System.Numerics.Vector2(cursor.X + barWidth * fraction, cursor.Y + barHeight),
-                        barColour);
-
-                // Peak tick: white vertical line that sticks at the highest seen value
-                if (peakFraction > 0f)
-                {
-                    float px = cursor.X + barWidth * peakFraction;
-                    drawList.AddLine(
-                        new System.Numerics.Vector2(px, cursor.Y),
-                        new System.Numerics.Vector2(px, cursor.Y + barHeight),
-                        0xFFFFFFFF, 2f);
-                }
-
-                // Label: name + smoothed + peak
-                string label = $"{name}  {ms:F2} ms  peak {peakMs:F2}";
-                drawList.AddText(
-                    new System.Numerics.Vector2(cursor.X + 4f, cursor.Y + 1f),
-                    0xFFFFFFFF,
-                    label);
-
-                // Advance cursor past the bar
-                ImGui.Dummy(new System.Numerics.Vector2(barWidth, barHeight));
-                ImGui.Spacing();
-            }
-
-            // Legend: show what 100% bar width represents
-            ImGui.TextDisabled($"Bar = {barBudgetMs} ms (60 fps budget)");
             ImGui.Spacing();
         }
 
@@ -167,5 +89,62 @@ public class DebugWindow
         ImGui.TextDisabled("[Ctrl+S] Save world  [Scroll] Cycle hotbar");
 
         ImGui.End();
+    }
+
+    /// <summary>Renders FPS and frame-time scrolling line graphs using ImGui.PlotLines.</summary>
+    private void RenderPerformanceGraphs()
+    {
+        var fpsHistory = Profiler.FpsHistory;
+        var ftHistory = Profiler.FrameTimeHistory;
+        int offset = Profiler.GlobalOffset;
+        int len = Profiler.HistoryLength;
+
+        ImGui.TextColored(new System.Numerics.Vector4(1f, 0.85f, 0f, 1f), "Performance");
+        ImGui.Separator();
+
+        // FPS graph — green overlay text
+        string fpsOverlay = $"{_smoothFps:F0} FPS";
+        ImGui.PushStyleColor(ImGuiCol.PlotLines, new System.Numerics.Vector4(0.2f, 0.85f, 0.2f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.1f, 0.1f, 0.1f, 0.8f));
+        ImGui.PlotLines("##FPS", ref fpsHistory[0], len, offset, fpsOverlay, 0f, 240f, new System.Numerics.Vector2(340, 80));
+        ImGui.PopStyleColor(2);
+
+        // Frame time graph — yellow
+        string ftOverlay = $"{Profiler.FrameTimeHistory[(offset + len - 1) % len]:F1} ms";
+        ImGui.PushStyleColor(ImGuiCol.PlotLines, new System.Numerics.Vector4(0.95f, 0.8f, 0.1f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.1f, 0.1f, 0.1f, 0.8f));
+        ImGui.PlotLines("##FrameTime", ref ftHistory[0], len, offset, ftOverlay, 0f, 33f, new System.Numerics.Vector2(340, 80));
+        ImGui.PopStyleColor(2);
+    }
+
+    /// <summary>Renders per-section timing graphs plus color-coded summary text.</summary>
+    private static void RenderTimingsGraphs()
+    {
+        int len = Profiler.HistoryLength;
+
+        foreach (var name in Profiler.Sections)
+        {
+            var history = Profiler.GetHistory(name);
+            if (history.Length == 0) continue;
+            int offset = Profiler.GetHistoryOffset(name);
+
+            double ms = Profiler.GetMs(name);
+            double peakMs = Profiler.GetPeakMs(name);
+
+            // Color: green < 1 ms, yellow < 5 ms, red >= 5 ms.
+            var lineColor = ms < 1.0
+                ? new System.Numerics.Vector4(0.2f, 0.85f, 0.2f, 1f)
+                : ms < 5.0
+                    ? new System.Numerics.Vector4(0.95f, 0.8f, 0.1f, 1f)
+                    : new System.Numerics.Vector4(0.95f, 0.25f, 0.25f, 1f);
+
+            string overlay = $"{name}  {ms:F2} ms  peak {peakMs:F2}";
+            ImGui.PushStyleColor(ImGuiCol.PlotLines, lineColor);
+            ImGui.PushStyleColor(ImGuiCol.FrameBg, new System.Numerics.Vector4(0.1f, 0.1f, 0.1f, 0.8f));
+            ImGui.PlotLines($"##{name}", ref history[0], len, offset, overlay, 0f, 16f, new System.Numerics.Vector2(340, 50));
+            ImGui.PopStyleColor(2);
+        }
+
+        ImGui.TextDisabled("16 ms = 60 fps budget");
     }
 }

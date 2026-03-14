@@ -230,9 +230,42 @@ public static class LightEngine
     // BFS flood-fill propagation
     // -------------------------------------------------------------------------
 
+    // Persistent queue for amortized chunk-streaming BFS.
+    private static readonly Queue<LightNode> _streamQueue = new();
+
+    /// <summary>Whether the streaming BFS queue still has nodes to process.</summary>
+    public static bool HasPendingStreamLight => _streamQueue.Count > 0;
+
     /// <summary>
-    /// Spreads light from every seed in <paramref name="queue"/> until the queue
-    /// is empty.
+    /// Seeds lighting for a newly-streamed chunk without propagating.
+    /// Call <see cref="ContinueStreamBfs"/> each subsequent frame to drain
+    /// the BFS incrementally, keeping frame time low.
+    /// </summary>
+    public static void SeedChunkStreaming(Chunk chunk, World world)
+    {
+        Array.Clear(chunk.SunLight, 0, Chunk.Volume);
+        Array.Clear(chunk.BlockLight, 0, Chunk.Volume);
+        SeedSunlightChunk(chunk, world, _streamQueue);
+        SeedBlockLightChunk(chunk, _streamQueue);
+    }
+
+    /// <summary>
+    /// Drains up to <paramref name="maxNodes"/> from the streaming BFS queue.
+    /// Returns true when the queue is fully drained (lighting complete).
+    /// </summary>
+    public static bool ContinueStreamBfs(World world, int maxNodes)
+    {
+        return BfsPropagate(world, _streamQueue, maxNodes);
+    }
+
+    /// <summary>
+    /// Spreads light from every seed in <paramref name="queue"/>.
+    ///
+    /// When <paramref name="maxNodes"/> is 0 the queue is drained completely
+    /// (used by FlushDirty / ComputeChunk).  A positive value caps the number
+    /// of nodes processed, spreading the work across multiple frames.
+    ///
+    /// Returns true when the queue is empty after this call.
     ///
     /// SUNLIGHT RULE: when propagating downward (-Y) from a fully-bright sky voxel
     ///   (level == MaxSunLight), pass the SAME level to the voxel below — no decay.
@@ -241,11 +274,13 @@ public static class LightEngine
     ///
     /// BLOCK LIGHT RULE: always decrement by 1 in all six directions.
     /// </summary>
-    private static void BfsPropagate(World world, Queue<LightNode> queue)
+    private static bool BfsPropagate(World world, Queue<LightNode> queue, int maxNodes = 0)
     {
-        while (queue.Count > 0)
+        int processed = 0;
+        while (queue.Count > 0 && (maxNodes == 0 || processed < maxNodes))
         {
             var node = queue.Dequeue();
+            processed++;
             if (node.Level <= 1) continue;
 
             for (int f = 0; f < 6; f++)
@@ -290,6 +325,7 @@ public static class LightEngine
                     queue.Enqueue(new LightNode(nx, ny, nz, nextLevel, node.IsSun));
             }
         }
+        return queue.Count == 0;
     }
 
     // -------------------------------------------------------------------------

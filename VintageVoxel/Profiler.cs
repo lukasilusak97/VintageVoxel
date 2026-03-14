@@ -14,6 +14,9 @@ namespace VintageVoxel;
 /// </summary>
 public static class Profiler
 {
+    /// <summary>Number of frames kept in the rolling history buffer for graphs.</summary>
+    public const int HistoryLength = 300;
+
     // Per-section stopwatches (restarted each Begin call).
     private static readonly Dictionary<string, Stopwatch> _active = new();
 
@@ -25,6 +28,15 @@ public static class Profiler
 
     // Peak value: set to raw when raw > peak, then decays slowly toward smoothed.
     private static readonly Dictionary<string, double> _peak = new();
+
+    // Rolling history ring buffers for each section (used by ImPlot graphs).
+    private static readonly Dictionary<string, float[]> _history = new();
+    private static readonly Dictionary<string, int> _historyOffset = new();
+
+    // Global FPS / frame-time rolling history (written by the game loop).
+    private static readonly float[] _fpsHistory = new float[HistoryLength];
+    private static readonly float[] _frameTimeHistory = new float[HistoryLength];
+    private static int _globalOffset;
 
     // Ordered list of section names in first-seen order for stable display.
     private static readonly List<string> _order = new();
@@ -63,6 +75,27 @@ public static class Profiler
         _peak[name] = _peak.TryGetValue(name, out double peak)
             ? ms > peak ? ms : peak + (smoothed - peak) * PeakDecayAlpha
             : ms;
+
+        // Record into rolling history ring buffer.
+        if (!_history.ContainsKey(name))
+        {
+            _history[name] = new float[HistoryLength];
+            _historyOffset[name] = 0;
+        }
+        var buf = _history[name];
+        var off = _historyOffset[name];
+        buf[off] = (float)ms;
+        _historyOffset[name] = (off + 1) % HistoryLength;
+    }
+
+    /// <summary>
+    /// Record global FPS and frame time. Call once per frame from the game loop.
+    /// </summary>
+    public static void RecordFrame(float fps, float frameTimeMs)
+    {
+        _fpsHistory[_globalOffset] = fps;
+        _frameTimeHistory[_globalOffset] = frameTimeMs;
+        _globalOffset = (_globalOffset + 1) % HistoryLength;
     }
 
     /// <summary>
@@ -82,4 +115,21 @@ public static class Profiler
     /// <summary>Decaying peak: sticks at the highest seen value then slowly fades back.</summary>
     public static double GetPeakMs(string name) =>
         _peak.TryGetValue(name, out double v) ? v : 0.0;
+
+    /// <summary>Rolling history buffer for a named section (ring buffer, use with <see cref="GetHistoryOffset"/>).</summary>
+    public static float[] GetHistory(string name) =>
+        _history.TryGetValue(name, out var buf) ? buf : Array.Empty<float>();
+
+    /// <summary>Current write offset into the ring buffer for a named section.</summary>
+    public static int GetHistoryOffset(string name) =>
+        _historyOffset.TryGetValue(name, out int off) ? off : 0;
+
+    /// <summary>Global FPS history ring buffer.</summary>
+    public static float[] FpsHistory => _fpsHistory;
+
+    /// <summary>Global frame-time history ring buffer.</summary>
+    public static float[] FrameTimeHistory => _frameTimeHistory;
+
+    /// <summary>Current write offset for global FPS / frame-time ring buffers.</summary>
+    public static int GlobalOffset => _globalOffset;
 }

@@ -17,11 +17,14 @@ public sealed class WorldStreamer
     private readonly WorldRenderer _renderer;
     private readonly string _savePath;
 
-    /// <summary>Max chunks to fully process (disk load + light + mesh) per frame.</summary>
+    /// <summary>Max chunks to fully process (disk load + light seed) per frame.</summary>
     private const int MaxChunksPerFrame = 1;
 
     /// <summary>Max total mesh rebuilds per frame (new chunks + their neighbors).</summary>
-    private const int MaxMeshRebuildsPerFrame = 4;
+    private const int MaxMeshRebuildsPerFrame = 2;
+
+    /// <summary>Max BFS light nodes to propagate per frame (~1-3ms budget).</summary>
+    private const int MaxBfsNodesPerFrame = 20_000;
 
     // Chunks waiting to be disk-loaded, lit, and meshed (sorted before draining).
     private readonly List<Vector3i> _pendingLoad = new();
@@ -100,13 +103,14 @@ public sealed class WorldStreamer
             }
             Profiler.End("Chunk Stream: Disk Load");
 
-            // Compute lighting top-to-bottom within the batch.
+            // Seed lighting into the amortized BFS queue (does NOT propagate yet).
             Profiler.Begin("Chunk Stream: Lighting");
             foreach (var key in batch.OrderByDescending(k => k.Y))
             {
                 if (_world.Chunks.TryGetValue(key, out var newChunk))
-                    LightEngine.ComputeChunk(newChunk, _world);
+                    LightEngine.SeedChunkStreaming(newChunk, _world);
             }
+            LightEngine.ContinueStreamBfs(_world, MaxBfsNodesPerFrame);
             Profiler.End("Chunk Stream: Lighting");
 
             // Queue the batch chunk and its face-adjacent neighbours for meshing,
@@ -135,8 +139,16 @@ public sealed class WorldStreamer
             _renderer.BordersDirty = true;
         }
 
-        // Drain deferred mesh rebuilds every frame, capped to keep frame time low.
-        if (_pendingMeshRebuild.Count > 0)
+        // Continue draining amortized lighting BFS from previous frames.
+        if (LightEngine.HasPendingStreamLight)
+        {
+            Profiler.Begin("Chunk Stream: Lighting");
+            LightEngine.ContinueStreamBfs(_world, MaxBfsNodesPerFrame);
+            Profiler.End("Chunk Stream: Lighting");
+        }
+
+        // Drain deferred mesh rebuilds only once lighting is complete.
+        if (!LightEngine.HasPendingStreamLight && _pendingMeshRebuild.Count > 0)
         {
             Profiler.Begin("Chunk Stream: Mesh Upload");
             int meshCount = Math.Min(_pendingMeshRebuild.Count, MaxMeshRebuildsPerFrame);

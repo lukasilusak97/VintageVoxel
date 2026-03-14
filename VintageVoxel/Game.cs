@@ -276,9 +276,13 @@ public class Game : GameWindow
 
         if (_debugVisible && _gameState == GameState.Playing && _worldRenderer != null)
         {
+            float fps = (float)(1.0 / args.Time);
+            float frameTimeMs = (float)(args.Time * 1000.0);
+            Profiler.RecordFrame(fps, frameTimeMs);
+
             _debugWindow.Render(
-                fps: (float)(1.0 / args.Time),
-                frameTimeMs: (float)(args.Time * 1000.0),
+                fps: fps,
+                frameTimeMs: frameTimeMs,
                 playerPos: _camera.Position,
                 chunksLoaded: _worldRenderer.ChunkCount,
                 creativeMode: _camera.CreativeMode,
