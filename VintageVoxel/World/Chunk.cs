@@ -255,6 +255,10 @@ public class Chunk
         int startWx = Position.X * Size;
         int startWz = Position.Z * Size;
 
+        // Settlement zone map — tracks which columns are inside roads / settlements.
+        var settlementZones = new SettlementMap.ZoneType[Size * Size];
+        var settlementDist = new float[Size * Size];
+
         // Quick check: if the lowest possible terrain is above this chunk, skip filling.
         float minSurface = float.MaxValue;
         float maxSurface = float.MinValue;
@@ -265,14 +269,30 @@ public class Chunk
                 float wx = startWx + x;
                 float wz = startWz + z;
                 float sh = ComputeSurfaceHeight(wx, wz);
+
+                // Apply settlement terrain flattening.
+                float flatFactor = SettlementMap.GetFlatteningFactor(wx, wz);
+                if (flatFactor > 0f)
+                {
+                    float targetH = SettlementMap.GetSettlementTargetHeight(wx, wz);
+                    if (targetH > 0f)
+                        sh = sh + (targetH - sh) * flatFactor;
+                }
+
                 surfaceHeights[x + z * Size] = sh;
                 biomeMap[x + z * Size] = ComputeBiome(wx, wz);
+
+                // Cache settlement zone for this column.
+                settlementZones[x + z * Size] = SettlementMap.Query(wx, wz, out float dist);
+                settlementDist[x + z * Size] = dist;
+
                 if (sh < minSurface) minSurface = sh;
                 if (sh > maxSurface) maxSurface = sh;
             }
 
-        // If the entire chunk is above all terrain AND above sea level, it's pure air — skip.
-        bool entirelyAboveTerrain = chunkWorldYMin > (int)MathF.Ceiling(maxSurface)
+        // If the entire chunk is above all terrain AND above sea level, check buildings too.
+        // Tall apartments can reach ~24 blocks above surface, so add headroom.
+        bool entirelyAboveTerrain = chunkWorldYMin > (int)MathF.Ceiling(maxSurface) + 24
                                    && chunkWorldYMin > SeaLevel;
         if (entirelyAboveTerrain) return;
 
@@ -348,12 +368,65 @@ public class Chunk
                 }
             }
 
+        // ── Settlement overlay ──────────────────────────────────────────
+        // After base terrain is filled, stamp roads and buildings on top.
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int colIdx = x + z * Size;
+                var zone = settlementZones[colIdx];
+                if (zone == SettlementMap.ZoneType.None) continue;
+
+                float surfaceH = surfaceHeights[colIdx];
+                int surfaceY = (int)MathF.Ceiling(surfaceH) - 1;
+                float frac = surfaceH - surfaceY;
+                byte surfaceLayer = (byte)Math.Clamp((int)MathF.Ceiling(frac * 16f), 1, 16);
+                float dist = settlementDist[colIdx];
+                float fwx = startWx + x;
+                float fwz = startWz + z;
+
+                if (zone == SettlementMap.ZoneType.MainRoad || zone == SettlementMap.ZoneType.SecondaryRoad)
+                {
+                    // Inter-settlement roads
+                    for (int ly = 0; ly < Size; ly++)
+                    {
+                        int wy = chunkWorldYMin + ly;
+                        Block? rb = BuildingGenerator.GetInterRoadBlock(
+                            (int)fwx, wy, (int)fwz, surfaceY, surfaceLayer,
+                            zone == SettlementMap.ZoneType.MainRoad);
+                        if (rb.HasValue)
+                            _blocks[Index(x, ly, z)] = rb.Value;
+                    }
+                }
+                else
+                {
+                    // Village or City — determine structure at this column
+                    var structure = SettlementMap.GetStructureAt(fwx, fwz, zone, dist);
+                    if (structure == SettlementMap.StructureType.None) continue;
+
+                    for (int ly = 0; ly < Size; ly++)
+                    {
+                        int wy = chunkWorldYMin + ly;
+                        Block? sb = BuildingGenerator.GetStructureBlock(
+                            (int)fwx, wy, (int)fwz, structure, surfaceY, zone);
+                        if (sb.HasValue)
+                            _blocks[Index(x, ly, z)] = sb.Value;
+                    }
+                }
+            }
+
         // Place trees — scan an extended border region so trees whose trunks land
         // outside this chunk still deposit leaves inside it (no cross-chunk seams).
         const int border = 4;
         for (int tz = startWz - border; tz < startWz + Size + border; tz++)
             for (int tx = startWx - border; tx < startWx + Size + border; tx++)
             {
+                // Suppress trees inside settlements and on roads.
+                if (SettlementMap.IsInSettlement(tx, tz)) continue;
+                var roadZone = SettlementMap.Query(tx, tz, out _);
+                if (roadZone == SettlementMap.ZoneType.MainRoad
+                    || roadZone == SettlementMap.ZoneType.SecondaryRoad) continue;
+
                 int biome = ComputeBiome(tx, tz);
                 if (biome == BiomeDesert) continue;
 

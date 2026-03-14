@@ -232,5 +232,113 @@
             "east": "podzol_side",
             "west": "podzol_side"
         }
+    },
+    {
+        "id": 30,
+        "name": "Dirt Path",
+        "textures": {
+            "up": "dirt_path_top",
+            "down": "dirt",
+            "north": "dirt_path_side",
+            "south": "dirt_path_side",
+            "east": "dirt_path_side",
+            "west": "dirt_path_side"
+        }
+    },
+    {
+        "id": 31,
+        "name": "Stone Bricks",
+        "textures": { "all": "stone_bricks" }
+    },
+    {
+        "id": 32,
+        "name": "Bricks",
+        "textures": { "all": "bricks" }
+    },
+    {
+        "id": 33,
+        "name": "Spruce Planks",
+        "textures": { "all": "spruce_planks" }
+    },
+    {
+        "id": 34,
+        "name": "Farmland",
+        "textures": {
+            "up": "farmland_moist",
+            "down": "dirt",
+            "north": "dirt",
+            "south": "dirt",
+            "east": "dirt",
+            "west": "dirt"
+        }
+    },
+    {
+        "id": 35,
+        "name": "Hay Block",
+        "textures": {
+            "up": "hay_block_top",
+            "down": "hay_block_top",
+            "north": "hay_block_side",
+            "south": "hay_block_side",
+            "east": "hay_block_side",
+            "west": "hay_block_side"
+        }
+    },
+    {
+        "id": 36,
+        "name": "White Wool",
+        "textures": { "all": "white_wool" }
+    },
+    {
+        "id": 37,
+        "name": "Terracotta",
+        "textures": { "all": "terracotta" }
+    },
+    {
+        "id": 38,
+        "name": "Red Terracotta",
+        "textures": { "all": "red_terracotta" }
+    },
+    {
+        "id": 39,
+        "name": "Brown Terracotta",
+        "textures": { "all": "brown_terracotta" }
+    },
+    {
+        "id": 40,
+        "name": "Smooth Stone",
+        "textures": { "all": "smooth_stone" }
+    },
+    {
+        "id": 41,
+        "name": "Bookshelf",
+        "textures": {
+            "up": "oak_planks",
+            "down": "oak_planks",
+            "north": "bookshelf",
+            "south": "bookshelf",
+            "east": "bookshelf",
+            "west": "bookshelf"
+        }
+    },
+    {
+        "id": 42,
+        "name": "Birch Planks",
+        "textures": { "all": "birch_planks" }
+    },
+    {
+        "id": 43,
+        "name": "Dark Oak Planks",
+        "textures": { "all": "dark_oak_planks" }
+    },
+    {
+        "id": 44,
+        "name": "Andesite",
+        "textures": { "all": "andesite" }
+    },
+    {
+        "id": 45,
+        "name": "Polished Andesite",
+        "textures": { "all": "polished_andesite" }
     }
 ]
