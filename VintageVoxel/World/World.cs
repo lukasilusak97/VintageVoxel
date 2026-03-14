@@ -205,4 +205,25 @@ public class World
     /// after <see cref="Update"/> creates the slot.
     /// </summary>
     public void ReplaceChunk(Vector3i key, Chunk chunk) => _chunks[key] = chunk;
+
+    /// <summary>
+    /// Ensures every vertical chunk in the column at (<paramref name="chunkX"/>,
+    /// <paramref name="chunkZ"/>) is loaded, generating any that are missing.
+    /// Returns the keys of newly created chunks so the caller can include them
+    /// in lighting and mesh-build passes.
+    /// </summary>
+    public List<Vector3i> EnsureColumnLoaded(int chunkX, int chunkZ)
+    {
+        var added = new List<Vector3i>();
+        for (int cy = 0; cy < MaxChunkY; cy++)
+        {
+            var key = new Vector3i(chunkX, cy, chunkZ);
+            if (!_chunks.ContainsKey(key))
+            {
+                _chunks[key] = new Chunk(key);
+                added.Add(key);
+            }
+        }
+        return added;
+    }
 }

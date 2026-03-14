@@ -244,7 +244,8 @@ public class Game : GameWindow
 
         _worldRenderer?.Render(_camera, _entityItems, _debugState,
                                _gameState == GameState.Playing,
-                               FramebufferSize.X, FramebufferSize.Y);
+                               FramebufferSize.X, FramebufferSize.Y,
+                               (float)args.Time);
 
         // Render vehicles.
         if (_gameState == GameState.Playing && _vehicles.Count > 0)
@@ -561,17 +562,55 @@ public class Game : GameWindow
             if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
                 _world.ReplaceChunk(key, saved);
         }
+
+        // Check for an existing player save before lighting so we can force-load
+        // the spawn column for new players (needed to raycast the surface height).
+        bool hasExistingPlayer = WorldPersistence.TryLoadPlayer(
+            _savePath, out var loadedPlayer, out var loadedPos);
+
+        if (!hasExistingPlayer)
+        {
+            var spawnChunk = World.WorldToChunk(new Vector3(16f, 0f, 16f));
+            var spawnAdded = _world.EnsureColumnLoaded(spawnChunk.X, spawnChunk.Y);
+            foreach (var key in spawnAdded)
+            {
+                if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
+                    _world.ReplaceChunk(key, saved);
+            }
+            initial.AddRange(spawnAdded);
+        }
+
         LightEngine.PropagateSunlight(_world);
 
         // Restore saved player (position + inventory + stats) or start fresh.
-        if (WorldPersistence.TryLoadPlayer(_savePath, out var loadedPlayer, out var loadedPos))
+        if (hasExistingPlayer)
         {
-            _player = loadedPlayer;
+            _player = loadedPlayer!;
             _camera.Position = loadedPos;
         }
         else
         {
             _player = new Player();
+
+            // Cast a ray from the top of the world downward to find the terrain
+            // surface, then place the player on top of it.
+            float worldHeight = World.MaxChunkY * Chunk.Size;
+            float spawnX = _player.SpawnPoint.X;
+            float spawnZ = _player.SpawnPoint.Z;
+            var hit = Raycaster.Cast(
+                new Vector3(spawnX, worldHeight - 1f, spawnZ),
+                -Vector3.UnitY, _world, worldHeight);
+
+            if (hit.Hit)
+            {
+                float surfaceY = hit.BlockPos.Y + 1 + GameConstants.Physics.EyeHeight;
+                _camera.Position = new Vector3(spawnX, surfaceY, spawnZ);
+                _player.SpawnPoint = new Vector3(spawnX, surfaceY, spawnZ);
+            }
+            else
+            {
+                _camera.Position = new Vector3(spawnX, 130f, spawnZ);
+            }
         }
 
         _worldRenderer = new WorldRenderer(_gpuResources, _world, _shader, _atlas,

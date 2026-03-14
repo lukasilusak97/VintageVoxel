@@ -38,7 +38,7 @@ public class Camera
     private const float FarPlane = 1000f;
 
     // --- Movement & look sensitivity ---
-    public float MoveSpeed = 10f;  // World units per second (creative fly speed)
+    public float MoveSpeed = 50f;  // World units per second (creative fly speed)
     public float MouseSensitivity = 0.002f; // Radians per pixel
 
     // Eye height is retained here solely for the FeetPosition convenience property.

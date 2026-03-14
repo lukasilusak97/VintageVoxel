@@ -25,10 +25,13 @@ public sealed class WorldRenderer : IDisposable
     private readonly World _world;
     private readonly Shader _shader;
     private readonly Shader _shadowShader;
+    private readonly Shader _waterShader;
     private readonly Texture _atlas;
     private readonly EntityItemRenderer _entityRenderer;
     private readonly Inventory _inventory;
     private readonly ChunkBorderRenderer _borders;
+
+    private float _elapsedTime;
 
     // ── Shadow map ────────────────────────────────────────────────────────────
     private const int ShadowMapSize = 2048;
@@ -63,6 +66,7 @@ public sealed class WorldRenderer : IDisposable
         _inventory = inventory;
         _borders = new ChunkBorderRenderer();
         _shadowShader = new Shader("Shaders/shadow.vert", "Shaders/shadow.frag");
+        _waterShader = new Shader("Shaders/water.vert", "Shaders/water.frag");
         InitShadowMap();
     }
 
@@ -244,6 +248,10 @@ public sealed class WorldRenderer : IDisposable
                 {
                     ref var block = ref chunk.GetBlock(x, y, z);
                     if (block.IsEmpty || !block.IsTransparent) continue;
+                    // Only treat blocks whose block definition declares a model
+                    // (e.g. Torch). Skip regular terrain blocks like leaves whose
+                    // IDs may collide with model-type items.
+                    if (!BlockRegistry.HasModel(block.Id)) continue;
                     var item = ItemRegistry.Get(block.Id);
                     if (item?.Type != ItemType.Model) continue;
                     int wx = chunk.Position.X * Chunk.Size + x;
@@ -358,8 +366,11 @@ public sealed class WorldRenderer : IDisposable
     /// the debug border overlay, and the hotbar 3-D item previews.
     /// </summary>
     public void Render(Camera camera, IReadOnlyList<EntityItem> entityItems,
-                       DebugState debug, bool gameIsPlaying, int fbWidth, int fbHeight)
+                       DebugState debug, bool gameIsPlaying, int fbWidth, int fbHeight,
+                       float deltaTime = 0f)
     {
+        _elapsedTime += deltaTime;
+
         // ── 1. Shadow pass ────────────────────────────────────────────────────
         _lightSpaceMatrix = ComputeLightSpaceMatrix(camera.Position);
         RenderShadowPass(entityItems);
@@ -414,7 +425,7 @@ public sealed class WorldRenderer : IDisposable
 
         // Transparent water pass — after all opaque geometry and entities.
         Profiler.Begin("Water Draw");
-        RenderTransparentChunks(frustum);
+        RenderTransparentChunks(frustum, camera.Position, ref view, ref projection);
         Profiler.End("Water Draw");
 
         if (debug.WireframeMode)
@@ -454,12 +465,28 @@ public sealed class WorldRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    private void RenderTransparentChunks(Frustum frustum)
+    private void RenderTransparentChunks(Frustum frustum, Vector3 cameraPos,
+                                         ref Matrix4 view, ref Matrix4 projection)
     {
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        GL.DepthMask(false); // don't write depth for transparent geometry
-        _shader.SetFloat("uAlphaOverride", 0.55f);
+        GL.DepthMask(false);
+
+        _waterShader.Use();
+        _waterShader.SetMatrix4("view", ref view);
+        _waterShader.SetMatrix4("projection", ref projection);
+        _waterShader.SetFloat("uTime", _elapsedTime);
+        _waterShader.SetVector3("uCameraPos", cameraPos);
+        _waterShader.SetMatrix4("lightSpaceMatrix", ref _lightSpaceMatrix);
+
+        // Bind shadow map on unit 0 (water shader doesn't use a texture atlas).
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _shadowDepthTex);
+        _waterShader.SetInt("uShadowMap", 0);
+
+        float renderDist = World.RenderDistance * Chunk.Size;
+        _waterShader.SetFloat("uFogStart", renderDist * 0.60f);
+        _waterShader.SetFloat("uFogEnd", renderDist * 0.95f);
 
         foreach (var (key, gpu) in _chunkTransGpuData)
         {
@@ -474,14 +501,16 @@ public sealed class WorldRenderer : IDisposable
                 continue;
 
             var model = Matrix4.CreateTranslation(wx, wy, wz);
-            _shader.SetMatrix4("model", ref model);
+            _waterShader.SetMatrix4("model", ref model);
 
             GL.BindVertexArray(gpu.Vao);
             GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount, DrawElementsType.UnsignedInt, 0);
         }
         GL.BindVertexArray(0);
 
-        _shader.SetFloat("uAlphaOverride", -1.0f);
+        // Restore main shader and atlas for subsequent rendering.
+        _shader.Use();
+        _atlas.Use(TextureUnit.Texture0);
         GL.DepthMask(true);
         GL.Disable(EnableCap.Blend);
     }
@@ -682,6 +711,7 @@ public sealed class WorldRenderer : IDisposable
 
         _borders.Dispose();
         _shadowShader.Dispose();
+        _waterShader.Dispose();
         GL.DeleteFramebuffer(_shadowFbo);
         GL.DeleteTexture(_shadowDepthTex);
     }

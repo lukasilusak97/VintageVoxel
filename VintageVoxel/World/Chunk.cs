@@ -134,6 +134,23 @@ public class Chunk
 
     private static float ComputeSurfaceHeight(float wx, float wz)
     {
+        // Continentalness — very low-frequency noise that separates ocean from land.
+        // Produces large, coherent land masses with distinct ocean basins.
+        float continentalness = NoiseGenerator.Octave(wx * 0.0008f + 3000f, wz * 0.0008f + 3000f, octaves: 4);
+
+        // Land factor: 0 = ocean, 1 = land.  Threshold chosen so ~65-70% of
+        // the world is dry land, the rest is ocean.
+        float landFactor;
+        if (continentalness < 0.33f)
+            landFactor = 0f;
+        else if (continentalness < 0.43f)
+            landFactor = (continentalness - 0.33f) * 10f;
+        else
+            landFactor = 1f;
+
+        // Hermite smoothstep for natural coastlines.
+        landFactor = landFactor * landFactor * (3f - 2f * landFactor);
+
         // Base continent shape — wide smooth features.
         float continent = NoiseGenerator.Octave(wx * 0.010f, wz * 0.010f, octaves: 6);
 
@@ -141,29 +158,48 @@ public class Chunk
         float detail = NoiseGenerator.Octave(wx * 0.035f, wz * 0.035f, octaves: 4);
 
         // Erosion noise — controls how mountainous an area is.
-        float erosion = NoiseGenerator.Octave(wx * 0.0001f + 1000f, wz * 0.0001f + 1000f, octaves: 3);
+        float erosion = NoiseGenerator.Octave(wx * 0.0006f + 1000f, wz * 0.0006f + 1000f, octaves: 3);
 
-        // Base height: [32, 96] from continent noise.
-        float h = 32f + continent * 64f;
+        // Ocean floor: 28–48 (well below sea level 64).
+        float oceanH = 28f + continent * 20f;
 
-        // Small detail bumps: ±4 blocks.
-        h += (detail - 0.5f) * 8f;
+        // Land base: 68–92 (safely above sea level 64).
+        float landH = 68f + continent * 24f;
 
-        // Mountain ridges — dramatically raise terrain where erosion noise is high.
-        if (erosion > 0.52f)
+        // Blend between ocean and land based on continentalness.
+        float h = oceanH + (landH - oceanH) * landFactor;
+
+        // Detail bumps: reduced on ocean floor to keep it flatter.
+        h += (detail - 0.5f) * 8f * (0.3f + 0.7f * landFactor);
+
+        // Mountain ridges — only on land.
+        if (landFactor > 0.5f && erosion > 0.45f)
         {
-            float strength = (erosion - 0.52f) / 0.48f;
-            float ridge = NoiseGenerator.Octave(wx * 0.025f, wz * 0.025f, octaves: 5);
+            float strength = (erosion - 0.45f) / 0.55f;
+            strength *= strength; // gradual ramp
+            float ridge = NoiseGenerator.Octave(wx * 0.02f, wz * 0.02f, octaves: 5);
             float ridged = 1f - MathF.Abs(ridge * 2f - 1f);
             ridged *= ridged; // sharpen peaks
-            h += ridged * strength * 80f;
+            h += ridged * strength * 120f * landFactor;
         }
 
-        // Valleys — flatten and lower terrain where erosion is very low.
-        if (erosion < 0.35f)
+        // Valleys — flatten and lower terrain where erosion is very low (land only).
+        if (landFactor > 0.5f && erosion < 0.30f)
         {
-            float valleyStr = (0.35f - erosion) / 0.35f;
+            float valleyStr = (0.30f - erosion) / 0.30f;
             h = MathF.Max(h * (1f - valleyStr * 0.25f), 8f);
+        }
+
+        // Inland lakes — rare medium-frequency depressions deep inside land masses.
+        if (landFactor > 0.85f)
+        {
+            float lakeNoise = NoiseGenerator.Octave(wx * 0.005f + 7000f, wz * 0.005f + 7000f, octaves: 3);
+            if (lakeNoise < 0.25f)
+            {
+                float lakeDepth = (0.25f - lakeNoise) / 0.25f;
+                lakeDepth *= lakeDepth; // soften edges
+                h -= lakeDepth * 24f;
+            }
         }
 
         return Math.Clamp(h, 4f, MaxWorldHeight - 4f);
@@ -187,11 +223,11 @@ public class Chunk
             return humidity > 0.55f ? BiomeCherryGrove : BiomeSavanna;
 
         // Cold biomes.
-        if (temp < 0.28f)
+        if (temp < 0.25f)
             return BiomeSnowy;
 
-        if (temp < 0.40f)
-            return humidity < 0.40f ? BiomeMountains : BiomeTaiga;
+        if (temp < 0.45f)
+            return humidity < 0.45f ? BiomeMountains : BiomeTaiga;
 
         // Temperate band (0.40–0.58).
         if (humidity > 0.65f) return BiomeDarkForest;
@@ -322,7 +358,22 @@ public class Chunk
                 if (biome == BiomeDesert) continue;
 
                 int treeDensity = GetTreeDensity(biome);
-                if (treeDensity <= 0 || !ShouldPlaceTree(tx, tz, treeDensity)) continue;
+                if (treeDensity <= 0) continue;
+
+                // Vegetation density noise — creates distinct forested areas
+                // vs open veldt / grassland within all biomes.
+                float vegNoise = ComputeVegetationDensity(tx, tz);
+
+                // Open veldt: no trees at all.
+                if (vegNoise < 0.01f) continue;
+
+                // Scale the tree modulo by vegetation density:
+                //   vegNoise near 1 → dense forest (modulo shrinks → more trees)
+                //   vegNoise near 0 → open veldt   (modulo grows huge → virtually no trees)
+                float densityScale = 0.15f + 6.0f * (1f - vegNoise);
+                int adjustedDensity = Math.Max(4, (int)(treeDensity * densityScale));
+
+                if (!ShouldPlaceTree(tx, tz, adjustedDensity)) continue;
 
                 int sy = (int)MathF.Ceiling(ComputeSurfaceHeight(tx, tz)) - 1;
                 if (sy <= SeaLevel) continue;
@@ -355,18 +406,39 @@ public class Chunk
 
     private static int GetTreeDensity(int biome) => biome switch
     {
-        BiomePlains => 160,
-        BiomeForest => 36,
-        BiomeBirchForest => 40,
-        BiomeDarkForest => 28,
-        BiomeTaiga => 40,
-        BiomeSnowy => 56,
-        BiomeMountains => 100,
-        BiomeSavanna => 90,
-        BiomeCherryGrove => 44,
-        BiomeJungle => 24,
+        BiomePlains => 200,
+        BiomeForest => 64,
+        BiomeBirchForest => 72,
+        BiomeDarkForest => 48,
+        BiomeTaiga => 64,
+        BiomeSnowy => 80,
+        BiomeMountains => 140,
+        BiomeSavanna => 120,
+        BiomeCherryGrove => 72,
+        BiomeJungle => 40,
         _ => 0,
     };
+
+    // ------------------------------------------------------------------
+    // Vegetation density noise — separates forests from open grassland
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns a value in [0, 1] where 1 = dense forest and 0 = open grassland/veldt.
+    /// Uses low-frequency noise with a sharp threshold to create large, distinct patches.
+    /// Roughly 40-50% of land is open grassland/veldt, the rest is forested.
+    /// </summary>
+    private static float ComputeVegetationDensity(float wx, float wz)
+    {
+        // Low frequency for large patches (~600-700 blocks across).
+        float raw = NoiseGenerator.Octave(wx * 0.0015f + 5000f, wz * 0.0015f + 5000f, octaves: 3);
+        // Threshold at 0.50 so roughly half the land is open.
+        // Below 0.45 = fully open veldt, above 0.55 = fully forested.
+        if (raw < 0.45f) return 0f;
+        if (raw > 0.55f) return 1f;
+        float t = (raw - 0.45f) * 10f; // remap [0.45, 0.55] → [0, 1]
+        return t * t * (3f - 2f * t); // smoothstep
+    }
 
     // ------------------------------------------------------------------
     // Deterministic helpers

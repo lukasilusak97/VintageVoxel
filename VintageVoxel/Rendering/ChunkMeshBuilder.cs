@@ -193,17 +193,23 @@ public static class ChunkMeshBuilder
                     // --- Emit water overlay faces ---
                     if (hasWater)
                     {
-                        // Build a virtual water block for geometry emission.
-                        // Water top is at WaterLevel/16; water bottom is at terrain TopOffset (or 0 if no terrain).
-                        float waterTop = block.WaterTopOffset;
-                        float waterBot = hasTerrain ? block.TopOffset : 0f;
-
                         var waterBlock = new Block
                         {
                             Id = 15,
                             IsTransparent = true,
                             Layer = block.WaterLevel,
                         };
+
+                        // Check which horizontal neighbours lack water (shore edges).
+                        bool shoreNorth = !GetNeighbour(x, y, z - 1, chunk, world).HasWater;
+                        bool shoreSouth = !GetNeighbour(x, y, z + 1, chunk, world).HasWater;
+                        bool shoreWest  = !GetNeighbour(x - 1, y, z, chunk, world).HasWater;
+                        bool shoreEast  = !GetNeighbour(x + 1, y, z, chunk, world).HasWater;
+                        // Diagonal neighbours for corner foam.
+                        bool shoreNW = !GetNeighbour(x - 1, y, z - 1, chunk, world).HasWater;
+                        bool shoreNE = !GetNeighbour(x + 1, y, z - 1, chunk, world).HasWater;
+                        bool shoreSW = !GetNeighbour(x - 1, y, z + 1, chunk, world).HasWater;
+                        bool shoreSE = !GetNeighbour(x + 1, y, z + 1, chunk, world).HasWater;
 
                         for (int face = 0; face < 6; face++)
                         {
@@ -212,25 +218,18 @@ public static class ChunkMeshBuilder
                             Block nb = GetNeighbour(nx, ny, nz, chunk, world);
 
                             bool exposed;
-                            if (face == 0) // top
-                            {
-                                // Show water top if block above has no water.
+                            if (face == 0)
                                 exposed = !nb.HasWater;
-                            }
-                            else if (face == 1) // bottom
-                            {
-                                // Hide bottom if this cell has terrain (terrain covers the bottom).
-                                // Show bottom if no terrain below and neighbour below has no water.
+                            else if (face == 1)
                                 exposed = !hasTerrain && !nb.HasWater && (nb.IsTransparent || nb.IsPartial);
-                            }
-                            else // sides
-                            {
-                                // Show side if neighbour has no water or has lower water.
+                            else
                                 exposed = !nb.HasWater;
-                            }
 
                             if (exposed)
-                                EmitFace(transVerts, transIndices, face, x, y, z, waterBlock, chunk, world);
+                                EmitWaterFace(transVerts, transIndices, face, x, y, z,
+                                              waterBlock, chunk, world,
+                                              shoreNorth, shoreSouth, shoreWest, shoreEast,
+                                              shoreNW, shoreNE, shoreSW, shoreSE);
                         }
                     }
                 }
@@ -482,5 +481,116 @@ public static class ChunkMeshBuilder
     {
         v.Add(x); v.Add(y); v.Add(z); v.Add(u); v.Add(vt);
         v.Add(sunLight); v.Add(blockLight); v.Add(ao);
+    }
+
+    // -----------------------------------------------------------------------
+    // Water face emission with shore proximity encoded in UV
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Emits a water face quad. The UV coordinates are repurposed to carry
+    /// per-vertex shore proximity (U) so the water shader can draw foam
+    /// only where water actually meets solid blocks.
+    /// </summary>
+    private static void EmitWaterFace(
+        List<float> verts, List<uint> indices,
+        int face, int bx, int by, int bz, Block block,
+        Chunk chunk, World? world,
+        bool shoreN, bool shoreS, bool shoreW, bool shoreE,
+        bool shoreNW, bool shoreNE, bool shoreSW, bool shoreSE)
+    {
+        uint baseIdx = (uint)(verts.Count / 8);
+
+        float topOffset = block.TopOffset;
+        float x0 = bx, x1 = bx + 1f;
+        float y0 = by, y1 = by + topOffset;
+        float z0 = bz, z1 = bz + 1f;
+
+        float dirScale = FaceSunScale[face];
+
+        float ao0, ao1, ao2, ao3;
+        float sun0, sun1, sun2, sun3;
+        float blk0, blk1, blk2, blk3;
+
+        ComputeVertexLighting(bx, by, bz, face, 0, dirScale, chunk, world, out ao0, out sun0, out blk0);
+        ComputeVertexLighting(bx, by, bz, face, 1, dirScale, chunk, world, out ao1, out sun1, out blk1);
+        ComputeVertexLighting(bx, by, bz, face, 2, dirScale, chunk, world, out ao2, out sun2, out blk2);
+        ComputeVertexLighting(bx, by, bz, face, 3, dirScale, chunk, world, out ao3, out sun3, out blk3);
+
+        bool flip = (ao0 + ao2 < ao1 + ao3);
+
+        // Per-vertex shore proximity stored in UV.x.
+        // For top faces: each vertex touches 2 cardinal edges + 1 diagonal corner.
+        // For side faces: always 1.0 (they only appear at water-solid boundary).
+        // For bottom faces: 0.0 (no foam).
+        float s0, s1, s2, s3;
+
+        if (face == 0) // Top (+Y)
+        {
+            // v0=(x0,z0)=NW  v1=(x0,z1)=SW  v2=(x1,z1)=SE  v3=(x1,z0)=NE
+            s0 = (shoreW || shoreN || shoreNW) ? 1f : 0f;
+            s1 = (shoreW || shoreS || shoreSW) ? 1f : 0f;
+            s2 = (shoreE || shoreS || shoreSE) ? 1f : 0f;
+            s3 = (shoreE || shoreN || shoreNE) ? 1f : 0f;
+        }
+        else if (face == 1) // Bottom
+        {
+            s0 = s1 = s2 = s3 = 0f;
+        }
+        else // Side faces
+        {
+            s0 = s1 = s2 = s3 = 1f;
+        }
+
+        switch (face)
+        {
+            case 0: // Top (+Y)
+                AddV(verts, x0, y1, z0, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z1, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z1, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x1, y1, z0, s3, 0f, sun3, blk3, ao3);
+                break;
+            case 1: // Bottom (-Y)
+                AddV(verts, x0, y0, z0, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x1, y0, z0, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x1, y0, z1, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z1, s3, 0f, sun3, blk3, ao3);
+                break;
+            case 2: // North (-Z)
+                AddV(verts, x0, y0, z0, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z0, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z0, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x1, y0, z0, s3, 0f, sun3, blk3, ao3);
+                break;
+            case 3: // South (+Z)
+                AddV(verts, x1, y0, z1, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x1, y1, z1, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x0, y1, z1, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z1, s3, 0f, sun3, blk3, ao3);
+                break;
+            case 4: // West (-X)
+                AddV(verts, x0, y0, z1, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z1, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x0, y1, z0, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z0, s3, 0f, sun3, blk3, ao3);
+                break;
+            case 5: // East (+X)
+                AddV(verts, x1, y0, z0, s0, 0f, sun0, blk0, ao0);
+                AddV(verts, x1, y1, z0, s1, 0f, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z1, s2, 0f, sun2, blk2, ao2);
+                AddV(verts, x1, y0, z1, s3, 0f, sun3, blk3, ao3);
+                break;
+        }
+
+        if (flip)
+        {
+            indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 3);
+            indices.Add(baseIdx + 1); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
+        }
+        else
+        {
+            indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
+            indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
+        }
     }
 }
