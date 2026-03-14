@@ -119,7 +119,7 @@ public class Game : GameWindow
         BlockRegistry.Initialize(nameToIndex);
 
         float aspect = Size.X / (float)Size.Y;
-        _camera = new Camera(new Vector3(16f, 35f, 50f), 70f, aspect);
+        _camera = new Camera(new Vector3(16f, 130f, 50f), 70f, aspect);
 
         _imgui = new ImGuiController(Size.X, Size.Y);
         _debugWindow = new DebugWindow();

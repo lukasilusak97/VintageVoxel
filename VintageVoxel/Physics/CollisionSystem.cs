@@ -75,6 +75,47 @@ public static class CollisionSystem
     }
 
     /// <summary>
+    /// When horizontal movement causes a collision, determines whether the
+    /// obstacle can be stepped over (surface within <paramref name="maxStepHeight"/>).
+    /// Returns the new eye-level Y if the step-up is possible, or null when
+    /// the obstacle is too tall or there is not enough headroom above.
+    /// </summary>
+    public static float? TryGetStepUpEyeY(World world, Vector3 eyePos, float maxStepHeight)
+    {
+        float feetY = eyePos.Y - EyeHeight;
+
+        int minX = (int)MathF.Floor(eyePos.X - PlayerHalfWidth);
+        int maxX = (int)MathF.Floor(eyePos.X + PlayerHalfWidth - 0.001f);
+        int minZ = (int)MathF.Floor(eyePos.Z - PlayerHalfWidth);
+        int maxZ = (int)MathF.Floor(eyePos.Z + PlayerHalfWidth - 0.001f);
+
+        float targetSurface = feetY;
+        int scanMinY = (int)MathF.Floor(feetY);
+        int scanMaxY = (int)MathF.Floor(feetY + maxStepHeight);
+
+        for (int y = scanMinY; y <= scanMaxY; y++)
+            for (int x = minX; x <= maxX; x++)
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    Block block = world.GetBlock(x, y, z);
+                    if (block.IsEmpty) continue;
+
+                    float surface = y + block.TopOffset;
+                    if (surface > feetY && surface <= feetY + maxStepHeight && surface > targetSurface)
+                        targetSurface = surface;
+                }
+
+        if (targetSurface <= feetY)
+            return null;
+
+        float newEyeY = targetSurface + EyeHeight;
+        if (IsCollidingAt(world, new Vector3(eyePos.X, newEyeY, eyePos.Z)))
+            return null;
+
+        return newEyeY;
+    }
+
+    /// <summary>
     /// Returns true when the player is resting on solid ground.
     /// </summary>
     public static bool IsOnGround(World world, Vector3 eyePos)

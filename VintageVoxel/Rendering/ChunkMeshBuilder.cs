@@ -148,54 +148,89 @@ public static class ChunkMeshBuilder
                 for (int x = 0; x < Chunk.Size; x++)
                 {
                     ref Block block = ref chunk.GetBlock(x, y, z);
-                    if (block.Id == 0 || BlockRegistry.HasModel(block.Id))
+                    if (block.IsEmpty && !block.HasWater)
+                        continue;
+                    if (block.Id != 0 && BlockRegistry.HasModel(block.Id))
                         continue;
 
-                    bool partial = block.IsPartial;
-                    bool isWater = block.Id == 15;
+                    bool hasTerrain = block.Id != 0;
+                    bool hasWater = block.HasWater;
 
-                    for (int face = 0; face < 6; face++)
+                    // --- Emit terrain faces ---
+                    if (hasTerrain)
                     {
-                        var (dx, dy, dz) = NeighbourOffsets[face];
-                        int nx = x + dx, ny = y + dy, nz = z + dz;
+                        bool partial = block.IsPartial;
+                        for (int face = 0; face < 6; face++)
+                        {
+                            var (dx, dy, dz) = NeighbourOffsets[face];
+                            int nx = x + dx, ny = y + dy, nz = z + dz;
+                            Block nb = GetNeighbour(nx, ny, nz, chunk, world);
 
-                        bool exposed;
-                        Block nb = GetNeighbour(nx, ny, nz, chunk, world);
-
-                        if (isWater)
-                        {
-                            // Water: show faces against everything except other water.
-                            exposed = nb.Id != 15;
-                        }
-                        else if (partial)
-                        {
-                            // Partial block: top face is always exposed (never flush with cell ceiling).
-                            // Side faces: exposed if neighbor is transparent or also partial.
-                            // Bottom face: standard culling (our bottom is flush with cell floor).
-                            if (face == 0) // top
-                                exposed = true;
-                            else if (face == 1) // bottom
-                                exposed = block.IsTransparent ? nb.Id == 0 : nb.IsTransparent;
-                            else // sides
-                                exposed = block.IsTransparent ? nb.Id == 0
-                                    : (nb.IsTransparent || nb.IsPartial);
-                        }
-                        else
-                        {
-                            // Full block: exposed if neighbor is transparent or partial
-                            // (a partial neighbor doesn't fully cover our face).
-                            if (block.IsTransparent)
-                                exposed = nb.Id == 0;
+                            bool exposed;
+                            if (partial)
+                            {
+                                if (face == 0)
+                                    exposed = true;
+                                else if (face == 1)
+                                    exposed = block.IsTransparent ? nb.Id == 0 && !nb.HasWater : nb.IsTransparent;
+                                else
+                                    exposed = block.IsTransparent ? nb.Id == 0 && !nb.HasWater
+                                        : (nb.IsTransparent || nb.IsPartial);
+                            }
                             else
-                                exposed = nb.IsTransparent || nb.IsPartial;
-                        }
+                            {
+                                if (block.IsTransparent)
+                                    exposed = nb.Id == 0 && !nb.HasWater;
+                                else
+                                    exposed = nb.IsTransparent || nb.IsPartial;
+                            }
 
-                        if (exposed)
-                        {
-                            if (isWater)
-                                EmitFace(transVerts, transIndices, face, x, y, z, block, chunk, world);
-                            else
+                            if (exposed)
                                 EmitFace(verts, indices, face, x, y, z, block, chunk, world);
+                        }
+                    }
+
+                    // --- Emit water overlay faces ---
+                    if (hasWater)
+                    {
+                        // Build a virtual water block for geometry emission.
+                        // Water top is at WaterLevel/16; water bottom is at terrain TopOffset (or 0 if no terrain).
+                        float waterTop = block.WaterTopOffset;
+                        float waterBot = hasTerrain ? block.TopOffset : 0f;
+
+                        var waterBlock = new Block
+                        {
+                            Id = 15,
+                            IsTransparent = true,
+                            Layer = block.WaterLevel,
+                        };
+
+                        for (int face = 0; face < 6; face++)
+                        {
+                            var (dx, dy, dz) = NeighbourOffsets[face];
+                            int nx = x + dx, ny = y + dy, nz = z + dz;
+                            Block nb = GetNeighbour(nx, ny, nz, chunk, world);
+
+                            bool exposed;
+                            if (face == 0) // top
+                            {
+                                // Show water top if block above has no water.
+                                exposed = !nb.HasWater;
+                            }
+                            else if (face == 1) // bottom
+                            {
+                                // Hide bottom if this cell has terrain (terrain covers the bottom).
+                                // Show bottom if no terrain below and neighbour below has no water.
+                                exposed = !hasTerrain && !nb.HasWater && (nb.IsTransparent || nb.IsPartial);
+                            }
+                            else // sides
+                            {
+                                // Show side if neighbour has no water or has lower water.
+                                exposed = !nb.HasWater;
+                            }
+
+                            if (exposed)
+                                EmitFace(transVerts, transIndices, face, x, y, z, waterBlock, chunk, world);
                         }
                     }
                 }

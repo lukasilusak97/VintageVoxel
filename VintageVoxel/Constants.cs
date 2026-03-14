@@ -26,6 +26,9 @@ public static class GameConstants
         /// <summary>Horizontal walk speed in survival mode (world units/s).</summary>
         public const float SurvivalMoveSpeed = 5f;
 
+        /// <summary>Maximum height the player can step up without jumping (8 layers = 0.5 blocks).</summary>
+        public const float StepHeight = 0.5f;
+
         /// <summary>Eye position above the player's feet (world units).</summary>
         public const float EyeHeight = 1.7f;
 

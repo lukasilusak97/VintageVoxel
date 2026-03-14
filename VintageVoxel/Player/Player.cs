@@ -25,7 +25,7 @@ public class Player
     // ── World position ────────────────────────────────────────────────────────
 
     /// <summary>The bed / initial spawn position used on death.</summary>
-    public Vector3 SpawnPoint { get; set; } = new Vector3(16f, 35f, 16f);
+    public Vector3 SpawnPoint { get; set; } = new Vector3(16f, 130f, 16f);
 
     // ── Inventory ─────────────────────────────────────────────────────────────
 

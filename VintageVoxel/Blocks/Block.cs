@@ -28,10 +28,17 @@ public struct Block
     /// </summary>
     public byte Layer;
 
-    /// <summary>Air — the absence of a block.</summary>
-    public static readonly Block Air = new Block { Id = 0, IsTransparent = true, Layer = 0 };
+    /// <summary>
+    /// Water height in this cell, 0–16, in 1/16th increments from the bottom.
+    /// 0 = no water. When &gt; 0 and Id != 0, terrain and water coexist in the same cell.
+    /// When &gt; 0 and Id == 0, the cell is pure water (no terrain).
+    /// </summary>
+    public byte WaterLevel;
 
-    /// <summary>Convenience: returns true when this block occupies no space.</summary>
+    /// <summary>Air — the absence of a block.</summary>
+    public static readonly Block Air = new Block { Id = 0, IsTransparent = true, Layer = 0, WaterLevel = 0 };
+
+    /// <summary>Convenience: returns true when this block has no terrain.</summary>
     public readonly bool IsEmpty => Id == 0;
 
     /// <summary>True when this block fills the full cube height (all 16 layers).</summary>
@@ -42,4 +49,10 @@ public struct Block
 
     /// <summary>Fractional top height within this block's cell [0, 1].</summary>
     public readonly float TopOffset => Layer / 16f;
+
+    /// <summary>True when this cell contains water (with or without terrain).</summary>
+    public readonly bool HasWater => WaterLevel > 0;
+
+    /// <summary>Fractional water top height within this block's cell [0, 1].</summary>
+    public readonly float WaterTopOffset => WaterLevel / 16f;
 }

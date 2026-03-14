@@ -14,6 +14,7 @@ public static class PhysicsSystem
     private static float JumpSpeed => GameConstants.Physics.JumpSpeed;
     private static float MaxFallSpeed => GameConstants.Physics.MaxFallSpeed;
     private static float SurvivalMoveSpeed => GameConstants.Physics.SurvivalMoveSpeed;
+    private static float StepHeight => GameConstants.Physics.StepHeight;
 
     /// <summary>
     /// Runs one physics/movement tick.
@@ -80,7 +81,20 @@ public static class PhysicsSystem
         // X axis
         float dx = camera.Velocity.X * dt;
         camera.Position.X += dx;
-        if (CollisionSystem.IsCollidingAt(world, camera.Position)) { camera.Position.X -= dx; camera.Velocity.X = 0f; }
+        if (CollisionSystem.IsCollidingAt(world, camera.Position))
+        {
+            float? stepY = CollisionSystem.TryGetStepUpEyeY(world, camera.Position, StepHeight);
+            if (stepY.HasValue)
+            {
+                camera.Position.Y = stepY.Value;
+                camera.Velocity.Y = 0f;
+            }
+            else
+            {
+                camera.Position.X -= dx;
+                camera.Velocity.X = 0f;
+            }
+        }
 
         // Y axis
         float dy = camera.Velocity.Y * dt;
@@ -102,7 +116,20 @@ public static class PhysicsSystem
         // Z axis
         float dz = camera.Velocity.Z * dt;
         camera.Position.Z += dz;
-        if (CollisionSystem.IsCollidingAt(world, camera.Position)) { camera.Position.Z -= dz; camera.Velocity.Z = 0f; }
+        if (CollisionSystem.IsCollidingAt(world, camera.Position))
+        {
+            float? stepZ = CollisionSystem.TryGetStepUpEyeY(world, camera.Position, StepHeight);
+            if (stepZ.HasValue)
+            {
+                camera.Position.Y = stepZ.Value;
+                camera.Velocity.Y = 0f;
+            }
+            else
+            {
+                camera.Position.Z -= dz;
+                camera.Velocity.Z = 0f;
+            }
+        }
 
         // Ground probe: a tiny downward step detects floor contact so jumping is
         // only allowed when the player is actually standing on something.

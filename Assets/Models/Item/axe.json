@@ -1,0 +1,35 @@
+{
+  "format_version": "1.21.11",
+  "credit": "Created for VintageVoxel",
+  "textures": {
+    "0": "oak_planks",
+    "1": "stone",
+    "particle": "oak_planks"
+  },
+  "elements": [
+    {
+      "from": [7, 0, 7],
+      "to": [9, 12, 9],
+      "faces": {
+        "north": { "texture": "#0" },
+        "east": { "texture": "#0" },
+        "south": { "texture": "#0" },
+        "west": { "texture": "#0" },
+        "up": { "texture": "#0" },
+        "down": { "texture": "#0" }
+      }
+    },
+    {
+      "from": [9, 9, 6],
+      "to": [14, 14, 10],
+      "faces": {
+        "north": { "texture": "#1" },
+        "east": { "texture": "#1" },
+        "south": { "texture": "#1" },
+        "west": { "texture": "#1" },
+        "up": { "texture": "#1" },
+        "down": { "texture": "#1" }
+      }
+    }
+  ]
+}

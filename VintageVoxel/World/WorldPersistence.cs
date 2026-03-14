@@ -29,7 +29,7 @@ namespace VintageVoxel;
 public static class WorldPersistence
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("VVCK");
-    private const byte Version = 5;  // v5 replaces slope shapes with layer heights
+    private const byte Version = 6;  // v6 adds WaterLevel per block
 
     /// <summary>Root directory that contains all per-world save folders.</summary>
     public static string SavesRootPath { get; } = Path.Combine(
@@ -189,6 +189,9 @@ public static class WorldPersistence
 
         // --- Layer RLE (v3+) ---
         WriteLayerRle(bw, chunk);
+
+        // --- Water RLE (v6+) ---
+        WriteWaterRle(bw, chunk);
     }
 
     // -------------------------------------------------------------------------
@@ -220,7 +223,7 @@ public static class WorldPersistence
             byte[] magic = br.ReadBytes(4);
             if (!magic.AsSpan().SequenceEqual(Magic.AsSpan())) return false;
 
-            // Validate version — accept v2 (no shape/layer), v3 (shape + chiseled), v4, v5 (layers).
+            // Validate version — accept v2 (no shape/layer), v3 (shape + chiseled), v4, v5 (layers), v6 (water).
             byte version = br.ReadByte();
             if (version < 2 || version > Version) return false;
 
@@ -239,7 +242,10 @@ public static class WorldPersistence
             // v3+: decode layer/shape RLE; v2 saves have no layer data (all cubes).
             byte[]? layers = (version >= 3) ? ReadLayerRle(br) : null;
 
-            chunk.LoadBlocksFromSave(blockIds, layers);
+            // v6+: decode water level RLE.
+            byte[]? waterLevels = (version >= 6) ? ReadWaterRle(br) : null;
+
+            chunk.LoadBlocksFromSave(blockIds, layers, waterLevels);
 
             // Skip chiseled block data from v3 saves (no longer used).
             if (version == 3)
@@ -310,6 +316,44 @@ public static class WorldPersistence
                 layers[pos++] = layer;
         }
         return layers;
+    }
+
+    private static void WriteWaterRle(BinaryWriter bw, Chunk chunk)
+    {
+        var runs = new List<(byte level, ushort count)>(32);
+        int i = 0;
+        while (i < Chunk.Volume)
+        {
+            byte level = chunk.GetRawWaterLevel(i);
+            int run = 1;
+            while (i + run < Chunk.Volume &&
+                   chunk.GetRawWaterLevel(i + run) == level &&
+                   run < ushort.MaxValue)
+                run++;
+            runs.Add((level, (ushort)run));
+            i += run;
+        }
+        bw.Write(runs.Count);
+        foreach (var (level, count) in runs)
+        {
+            bw.Write(level);
+            bw.Write(count);
+        }
+    }
+
+    private static byte[] ReadWaterRle(BinaryReader br)
+    {
+        int entryCount = br.ReadInt32();
+        var waterLevels = new byte[Chunk.Volume];
+        int pos = 0;
+        for (int e = 0; e < entryCount; e++)
+        {
+            byte level = br.ReadByte();
+            ushort count = br.ReadUInt16();
+            for (int j = 0; j < count && pos < Chunk.Volume; j++)
+                waterLevels[pos++] = level;
+        }
+        return waterLevels;
     }
 
     private static void WriteBlockRle(BinaryWriter bw, Chunk chunk)

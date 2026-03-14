@@ -69,13 +69,16 @@ public class Chunk
     /// <summary>Returns the raw block Layer at the given flat array index. Used by WorldPersistence.</summary>
     internal byte GetRawBlockLayer(int flatIndex) => _blocks[flatIndex].Layer;
 
+    /// <summary>Returns the raw block WaterLevel at the given flat array index. Used by WorldPersistence.</summary>
+    internal byte GetRawWaterLevel(int flatIndex) => _blocks[flatIndex].WaterLevel;
+
     /// <summary>
     /// Overwrites the entire block array from a saved ID (and optional layer) list produced by
     /// <see cref="WorldPersistence"/>.  Transparency is resolved through the
     /// block registry so water, leaves, and other transparent blocks render correctly.
     /// <paramref name="savedLayers"/> may be null for older saves, which default to Layer=16 (full) for solid, 0 for air.
     /// </summary>
-    internal void LoadBlocksFromSave(ushort[] savedIds, byte[]? savedLayers = null)
+    internal void LoadBlocksFromSave(ushort[] savedIds, byte[]? savedLayers = null, byte[]? savedWaterLevels = null)
     {
         for (int i = 0; i < Volume; i++)
         {
@@ -85,6 +88,7 @@ public class Chunk
                 Id = savedIds[i],
                 IsTransparent = transparent,
                 Layer = savedLayers != null ? savedLayers[i] : (byte)(savedIds[i] == 0 ? 0 : 16),
+                WaterLevel = savedWaterLevels != null ? savedWaterLevels[i] : (byte)0,
             };
         }
     }
@@ -104,8 +108,8 @@ public class Chunk
     // World generation
     // ------------------------------------------------------------------
 
-    // Y level at which still water fills any air column below the surface.
-    private const int SeaLevel = 12;
+    // World-space Y level at which still water fills any air column below the surface.
+    private const int SeaLevel = 64;
 
     // Biome identifiers.
     private const int BiomePlains = 0;
@@ -125,6 +129,9 @@ public class Chunk
     /// position.  Uses continent noise for base shape, detail noise for small hills,
     /// and an erosion channel that drives mountain ridges and valley flattening.
     /// </summary>
+    /// <summary>Maximum world-space build height (MaxChunkY * Size).</summary>
+    private const int MaxWorldHeight = World.MaxChunkY * Size; // 256
+
     private static float ComputeSurfaceHeight(float wx, float wz)
     {
         // Base continent shape — wide smooth features.
@@ -134,13 +141,13 @@ public class Chunk
         float detail = NoiseGenerator.Octave(wx * 0.035f, wz * 0.035f, octaves: 4);
 
         // Erosion noise — controls how mountainous an area is.
-        float erosion = NoiseGenerator.Octave(wx * 0.005f + 1000f, wz * 0.005f + 1000f, octaves: 3);
+        float erosion = NoiseGenerator.Octave(wx * 0.0001f + 1000f, wz * 0.0001f + 1000f, octaves: 3);
 
-        // Base height: [4, 20] from continent noise.
-        float h = 4f + continent * 16f;
+        // Base height: [32, 96] from continent noise.
+        float h = 32f + continent * 64f;
 
-        // Small detail bumps: ±2 blocks.
-        h += (detail - 0.5f) * 4f;
+        // Small detail bumps: ±4 blocks.
+        h += (detail - 0.5f) * 8f;
 
         // Mountain ridges — dramatically raise terrain where erosion noise is high.
         if (erosion > 0.52f)
@@ -149,17 +156,17 @@ public class Chunk
             float ridge = NoiseGenerator.Octave(wx * 0.025f, wz * 0.025f, octaves: 5);
             float ridged = 1f - MathF.Abs(ridge * 2f - 1f);
             ridged *= ridged; // sharpen peaks
-            h += ridged * strength * 10f;
+            h += ridged * strength * 80f;
         }
 
         // Valleys — flatten and lower terrain where erosion is very low.
         if (erosion < 0.35f)
         {
             float valleyStr = (0.35f - erosion) / 0.35f;
-            h = MathF.Max(h * (1f - valleyStr * 0.25f), 4f);
+            h = MathF.Max(h * (1f - valleyStr * 0.25f), 8f);
         }
 
-        return Math.Clamp(h, 2f, Size - 2f);
+        return Math.Clamp(h, 4f, MaxWorldHeight - 4f);
     }
 
     /// <summary>
@@ -168,8 +175,8 @@ public class Chunk
     /// </summary>
     private static int ComputeBiome(float wx, float wz)
     {
-        float temp = NoiseGenerator.Octave(wx * 0.006f, wz * 0.006f, octaves: 3);
-        float humidity = NoiseGenerator.Octave(wx * 0.008f + 500f, wz * 0.008f + 500f, octaves: 3);
+        float temp = NoiseGenerator.Octave(wx * 0.00012f, wz * 0.00012f, octaves: 3);
+        float humidity = NoiseGenerator.Octave(wx * 0.00016f + 500f, wz * 0.00016f + 500f, octaves: 3);
 
         // Hot biomes.
         if (temp > 0.72f)
@@ -201,8 +208,9 @@ public class Chunk
     {
         if (WorldGenConfig.FlatWorld) { GenerateFlat(); return; }
 
-        // Only the Y=0 chunk layer contains terrain; higher layers start as all-air.
-        if (Position.Y != 0) return;
+        // World-space Y range for this chunk.
+        int chunkWorldYMin = Position.Y * Size;
+        int chunkWorldYMax = chunkWorldYMin + Size - 1;
 
         // Pre-compute heightmap (float for sub-block precision) and biome map.
         var surfaceHeights = new float[Size * Size];
@@ -211,14 +219,26 @@ public class Chunk
         int startWx = Position.X * Size;
         int startWz = Position.Z * Size;
 
+        // Quick check: if the lowest possible terrain is above this chunk, skip filling.
+        float minSurface = float.MaxValue;
+        float maxSurface = float.MinValue;
+
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
             {
                 float wx = startWx + x;
                 float wz = startWz + z;
-                surfaceHeights[x + z * Size] = ComputeSurfaceHeight(wx, wz);
+                float sh = ComputeSurfaceHeight(wx, wz);
+                surfaceHeights[x + z * Size] = sh;
                 biomeMap[x + z * Size] = ComputeBiome(wx, wz);
+                if (sh < minSurface) minSurface = sh;
+                if (sh > maxSurface) maxSurface = sh;
             }
+
+        // If the entire chunk is above all terrain AND above sea level, it's pure air — skip.
+        bool entirelyAboveTerrain = chunkWorldYMin > (int)MathF.Ceiling(maxSurface)
+                                   && chunkWorldYMin > SeaLevel;
+        if (entirelyAboveTerrain) return;
 
         // Fill blocks column by column.
         for (int z = 0; z < Size; z++)
@@ -235,47 +255,32 @@ public class Chunk
                 bool isBeach = Math.Abs(surfaceY - SeaLevel) <= 2 && biome != BiomeMountains;
                 if (isBeach) biome = BiomeDesert;
 
-                // When terrain is partial and underwater, compute the water layer
-                // that fills the remaining space above the terrain in the same cell.
-                bool underwaterPartial = surfaceY < SeaLevel && surfaceLayer < 16;
+                bool underwater = surfaceY < SeaLevel;
+                bool partiallySubmerged = surfaceY == SeaLevel && surfaceLayer < 14;
 
-                for (int y = 0; y < Size; y++)
+                for (int ly = 0; ly < Size; ly++)
                 {
+                    int wy = chunkWorldYMin + ly; // world-space Y
                     Block b;
 
-                    if (underwaterPartial && y == surfaceY)
+                    if (wy > surfaceY && wy <= SeaLevel)
                     {
-                        // Terrain surface — keep its partial layer.
-                        b = BiomeSurfaceBlock(biome, surfaceY, surfaceLayer);
+                        byte wl = (wy == SeaLevel) ? (byte)14 : (byte)16;
+                        b = new Block { Id = 0, IsTransparent = true, Layer = 0, WaterLevel = wl };
                     }
-                    else if (y > surfaceY && y <= SeaLevel)
-                    {
-                        // Water column above terrain.
-                        byte waterLayer;
-                        if (y == SeaLevel)
-                            waterLayer = 14; // slightly recessed water surface
-                        else
-                            waterLayer = 16;
-                        b = new Block { Id = 15, IsTransparent = true, Layer = waterLayer };
-                    }
-                    else if (y > surfaceY)
+                    else if (wy > surfaceY)
                     {
                         b = Block.Air;
                     }
-                    else if (y == surfaceY)
+                    else if (wy == surfaceY)
                     {
-                        b = biome switch
-                        {
-                            BiomeDesert => new Block { Id = 5, IsTransparent = false, Layer = surfaceLayer },
-                            BiomeMountains => surfaceY > 24
-                                ? new Block { Id = 16, IsTransparent = false, Layer = surfaceLayer }
-                                : new Block { Id = 2, IsTransparent = false, Layer = surfaceLayer },
-                            BiomeSnowy => new Block { Id = 16, IsTransparent = false, Layer = surfaceLayer },
-                            BiomeTaiga or BiomeDarkForest => new Block { Id = 29, IsTransparent = false, Layer = surfaceLayer },
-                            _ => new Block { Id = 3, IsTransparent = false, Layer = surfaceLayer },
-                        };
+                        b = BiomeSurfaceBlock(biome, surfaceY, surfaceLayer);
+                        if (underwater)
+                            b.WaterLevel = 16;
+                        else if (partiallySubmerged)
+                            b.WaterLevel = 14;
                     }
-                    else if (y >= surfaceY - 3)
+                    else if (wy >= surfaceY - 3)
                     {
                         b = biome switch
                         {
@@ -283,25 +288,27 @@ public class Chunk
                             BiomeMountains => new Block { Id = 2, IsTransparent = false, Layer = 16 },
                             _ => new Block { Id = 1, IsTransparent = false, Layer = 16 },
                         };
+                        if (underwater)
+                            b.WaterLevel = 16;
                     }
                     else
                     {
                         // Stone base with ore pockets.
                         float wx = startWx + x;
                         float wz = startWz + z;
-                        uint h = (uint)((int)(wx * 374761393) ^ (y * 1274126177) ^ (int)(wz * 668265263));
+                        uint h = (uint)((int)(wx * 374761393) ^ (wy * 1274126177) ^ (int)(wz * 668265263));
                         h = (h ^ (h >> 13)) * 1274126177u;
                         h ^= h >> 16;
 
-                        if (y <= 12 && h % 130 == 0)
+                        if (wy <= 24 && h % 130 == 0)
                             b = new Block { Id = 14, IsTransparent = false, Layer = 16 };
-                        else if (y <= 18 && h % 70 == 0)
+                        else if (wy <= 48 && h % 70 == 0)
                             b = new Block { Id = 13, IsTransparent = false, Layer = 16 };
                         else
                             b = new Block { Id = 2, IsTransparent = false, Layer = 16 };
                     }
 
-                    _blocks[Index(x, y, z)] = b;
+                    _blocks[Index(x, ly, z)] = b;
                 }
             }
 
@@ -321,7 +328,7 @@ public class Chunk
                 if (sy <= SeaLevel) continue;
 
                 // Mountains: no trees above the snow line.
-                if (biome == BiomeMountains && sy > 24) continue;
+                if (biome == BiomeMountains && sy > 140) continue;
 
                 PlaceTreeForBiome(tx, tz, sy, biome);
             }
@@ -334,7 +341,7 @@ public class Chunk
     private static Block BiomeSurfaceBlock(int biome, int surfaceY, byte layer) => biome switch
     {
         BiomeDesert => new Block { Id = 5, IsTransparent = false, Layer = layer },
-        BiomeMountains => surfaceY > 24
+        BiomeMountains => surfaceY > 140
             ? new Block { Id = 16, IsTransparent = false, Layer = layer }
             : new Block { Id = 2, IsTransparent = false, Layer = layer },
         BiomeSnowy => new Block { Id = 16, IsTransparent = false, Layer = layer },
@@ -348,16 +355,16 @@ public class Chunk
 
     private static int GetTreeDensity(int biome) => biome switch
     {
-        BiomePlains => 25,
-        BiomeForest => 6,
-        BiomeBirchForest => 7,
-        BiomeDarkForest => 5,
-        BiomeTaiga => 7,
-        BiomeSnowy => 9,
-        BiomeMountains => 18,
-        BiomeSavanna => 14,
-        BiomeCherryGrove => 8,
-        BiomeJungle => 5,
+        BiomePlains => 160,
+        BiomeForest => 36,
+        BiomeBirchForest => 40,
+        BiomeDarkForest => 28,
+        BiomeTaiga => 40,
+        BiomeSnowy => 56,
+        BiomeMountains => 100,
+        BiomeSavanna => 90,
+        BiomeCherryGrove => 44,
+        BiomeJungle => 24,
         _ => 0,
     };
 
@@ -382,15 +389,24 @@ public class Chunk
     // Block-placement helpers (bounds-checked)
     // ------------------------------------------------------------------
 
-    private void SetLog(int lx, int ly, int lz, ushort logId)
+    /// <summary>Converts world-space Y to local Y for this chunk, or -1 if out of range.</summary>
+    private int WorldToLocalY(int worldY)
     {
-        if (InBounds(lx, ly, lz))
+        int ly = worldY - Position.Y * Size;
+        return (uint)ly < Size ? ly : -1;
+    }
+
+    private void SetLog(int lx, int wy, int lz, ushort logId)
+    {
+        int ly = WorldToLocalY(wy);
+        if (ly >= 0 && InBounds(lx, ly, lz))
             _blocks[Index(lx, ly, lz)] = new Block { Id = logId, IsTransparent = false, Layer = 16 };
     }
 
-    private void SetLeaf(int lx, int ly, int lz, ushort leafId)
+    private void SetLeaf(int lx, int wy, int lz, ushort leafId)
     {
-        if (InBounds(lx, ly, lz))
+        int ly = WorldToLocalY(wy);
+        if (ly >= 0 && InBounds(lx, ly, lz))
         {
             ref Block b = ref _blocks[Index(lx, ly, lz)];
             if (b.Id == 0)
@@ -445,75 +461,92 @@ public class Chunk
     // Tree generators — each writes only blocks inside this chunk
     // ------------------------------------------------------------------
 
-    /// <summary>Small oak: 4–5 block trunk, 3×3 crown + 1×1 cap.</summary>
+    /// <summary>Small oak: 4–7 block trunk, varied crown shape.</summary>
     private void PlaceOakTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 4 + (int)(hash % 2);
+        int trunkH = 4 + (int)(hash % 4); // 4-7
 
         for (int dy = 0; dy < trunkH; dy++)
             SetLog(lx, surfaceY + dy, lz, 7);
 
-        for (int layer = 0; layer < 3; layer++)
+        int crownLayers = 3 + (int)((hash >> 4) % 2); // 3-4 layers
+        for (int layer = 0; layer < crownLayers; layer++)
         {
             int ly = surfaceY + trunkH - 2 + layer;
-            int radius = layer == 2 ? 0 : 1;
-            for (int dz = -radius; dz <= radius; dz++)
-                for (int dx = -radius; dx <= radius; dx++)
-                    SetLeaf(lx + dx, ly, lz + dz, 8);
-        }
-    }
-
-    /// <summary>Large oak: 6–7 block trunk, 5×5 rounded crown.</summary>
-    private void PlaceLargeOakTree(int treeWx, int treeWz, int surfaceY, uint hash)
-    {
-        int lx = treeWx - Position.X * Size;
-        int lz = treeWz - Position.Z * Size;
-        int trunkH = 6 + (int)(hash % 2);
-
-        for (int dy = 0; dy < trunkH; dy++)
-            SetLog(lx, surfaceY + dy, lz, 7);
-
-        for (int layer = 0; layer < 4; layer++)
-        {
-            int ly = surfaceY + trunkH - 3 + layer;
-            int radius = layer < 2 ? 2 : layer == 2 ? 1 : 0;
+            int radius = layer >= crownLayers - 1 ? 0 : (layer == 0 && crownLayers > 3 ? 2 : 1);
             for (int dz = -radius; dz <= radius; dz++)
                 for (int dx = -radius; dx <= radius; dx++)
                 {
-                    if (radius == 2 && Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
+                    // Randomly trim corners for organic shape
+                    if (radius >= 2 && Math.Abs(dx) == radius && Math.Abs(dz) == radius
+                        && ((hash >> 8) + (uint)(dx + dz)) % 3 != 0) continue;
                     SetLeaf(lx + dx, ly, lz + dz, 8);
                 }
         }
     }
 
-    /// <summary>Birch: 5–6 block trunk, narrow 3×3 crown + 1×1 cap.</summary>
+    /// <summary>Large oak: 6–10 block trunk, wide rounded crown with variation.</summary>
+    private void PlaceLargeOakTree(int treeWx, int treeWz, int surfaceY, uint hash)
+    {
+        int lx = treeWx - Position.X * Size;
+        int lz = treeWz - Position.Z * Size;
+        int trunkH = 6 + (int)(hash % 5); // 6-10
+
+        for (int dy = 0; dy < trunkH; dy++)
+            SetLog(lx, surfaceY + dy, lz, 7);
+
+        int crownLayers = 4 + (int)((hash >> 3) % 3); // 4-6 layers
+        for (int layer = 0; layer < crownLayers; layer++)
+        {
+            int ly = surfaceY + trunkH - (crownLayers / 2) + layer;
+            int radius;
+            if (layer < crownLayers / 2) radius = 2 + (int)((hash >> 6) % 2); // 2-3
+            else if (layer < crownLayers - 1) radius = 1 + (int)((hash >> 8) % 2); // 1-2
+            else radius = 0;
+            for (int dz = -radius; dz <= radius; dz++)
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    // Trim corners with hash-based variation
+                    if (radius >= 2 && Math.Abs(dx) == radius && Math.Abs(dz) == radius
+                        && ((hash >> 10) + (uint)(dx * 3 + dz)) % 3 == 0) continue;
+                    SetLeaf(lx + dx, ly, lz + dz, 8);
+                }
+        }
+    }
+
+    /// <summary>Birch: 5–9 block trunk, narrow crown with variation.</summary>
     private void PlaceBirchTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 5 + (int)(hash % 2);
+        int trunkH = 5 + (int)(hash % 5); // 5-9
 
         for (int dy = 0; dy < trunkH; dy++)
             SetLog(lx, surfaceY + dy, lz, 17);
 
-        for (int layer = 0; layer < 3; layer++)
+        int crownLayers = 3 + (int)((hash >> 4) % 3); // 3-5 layers
+        for (int layer = 0; layer < crownLayers; layer++)
         {
             int ly = surfaceY + trunkH - 2 + layer;
-            int radius = layer == 2 ? 0 : 1;
+            int radius = layer >= crownLayers - 1 ? 0 : (layer == 0 && crownLayers > 3 ? 2 : 1);
             for (int dz = -radius; dz <= radius; dz++)
                 for (int dx = -radius; dx <= radius; dx++)
+                {
+                    if (radius >= 2 && Math.Abs(dx) == radius && Math.Abs(dz) == radius
+                        && ((hash >> 7) + (uint)(dx + dz * 2)) % 3 != 0) continue;
                     SetLeaf(lx + dx, ly, lz + dz, 18);
+                }
         }
     }
 
-    /// <summary>Spruce: 7–9 block trunk, conical crown widening toward the base.</summary>
+    /// <summary>Spruce: 7–14 block trunk, conical crown with varied width.</summary>
     private void PlaceSpruceTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 7 + (int)(hash % 3);
+        int trunkH = 7 + (int)(hash % 8); // 7-14
 
         for (int dy = 0; dy < trunkH; dy++)
             SetLog(lx, surfaceY + dy, lz, 19);
@@ -523,28 +556,34 @@ public class Chunk
 
         // Conical leaf layers — widening from top to bottom.
         int leafLayers = trunkH - 2;
+        int maxRadius = 2 + (int)((hash >> 5) % 3); // 2-4
         for (int i = 0; i < leafLayers; i++)
         {
             int ly = surfaceY + trunkH - 1 - i;
             int radius = 1 + i / 2;
-            if (radius > 3) radius = 3;
+            if (radius > maxRadius) radius = maxRadius;
+
+            // Alternate between full and trimmed layers for layered look
+            bool trimLayer = (i % 2 == 0) && ((hash >> 8) % 3 != 0);
 
             for (int dz = -radius; dz <= radius; dz++)
                 for (int dx = -radius; dx <= radius; dx++)
                 {
                     if (dx == 0 && dz == 0) continue; // trunk
-                    if (Math.Abs(dx) + Math.Abs(dz) > radius + 1) continue; // diamond trim
+                    int manhattan = Math.Abs(dx) + Math.Abs(dz);
+                    if (manhattan > radius + 1) continue; // diamond trim
+                    if (trimLayer && manhattan == radius + 1) continue; // extra trim
                     SetLeaf(lx + dx, ly, lz + dz, 20);
                 }
         }
     }
 
-    /// <summary>Dark oak: 2×2 trunk 5–6 blocks tall, wide dome canopy.</summary>
+    /// <summary>Dark oak: 2×2 trunk 5–9 blocks tall, wide dome canopy with variation.</summary>
     private void PlaceDarkOakTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 5 + (int)(hash % 2);
+        int trunkH = 5 + (int)(hash % 5); // 5-9
 
         for (int dy = 0; dy < trunkH; dy++)
         {
@@ -554,14 +593,18 @@ public class Chunk
             SetLog(lx + 1, surfaceY + dy, lz + 1, 21);
         }
 
-        // Dome canopy — 3 layers, widest at the bottom.
+        // Dome canopy — varied layers, widest at the bottom.
         float cx = lx + 0.5f, cz = lz + 0.5f;
-        for (int layer = 0; layer < 3; layer++)
+        int domeLayers = 3 + (int)((hash >> 4) % 3); // 3-5
+        float baseRadius = 2.5f + ((hash >> 7) % 3) * 0.5f; // 2.5-3.5
+        for (int layer = 0; layer < domeLayers; layer++)
         {
-            int ly = surfaceY + trunkH - 2 + layer;
-            float maxDist = layer == 2 ? 1.5f : 3.0f;
-            for (int dz = -3; dz <= 3; dz++)
-                for (int dx = -3; dx <= 3; dx++)
+            int ly = surfaceY + trunkH - (domeLayers / 2) + layer;
+            float frac = (float)layer / (domeLayers - 1);
+            float maxDist = layer >= domeLayers - 1 ? 1.5f : baseRadius * (1f - frac * 0.4f);
+            int extent = (int)MathF.Ceiling(maxDist);
+            for (int dz = -extent; dz <= extent; dz++)
+                for (int dx = -extent; dx <= extent; dx++)
                 {
                     float dist = MathF.Sqrt((lx + dx - cx) * (lx + dx - cx)
                                           + (lz + dz - cz) * (lz + dz - cz));
@@ -571,69 +614,88 @@ public class Chunk
         }
     }
 
-    /// <summary>Acacia: 5–6 block trunk, flat wide canopy (2 layers of 5×5).</summary>
+    /// <summary>Acacia: 5–9 block trunk, flat wide canopy with offset and variation.</summary>
     private void PlaceAcaciaTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 5 + (int)(hash % 2);
+        int trunkH = 5 + (int)(hash % 5); // 5-9
 
+        // Acacia trunk leans — offset the top
+        int leanX = (int)((hash >> 3) % 3) - 1; // -1, 0, or 1
+        int leanZ = (int)((hash >> 5) % 3) - 1;
         for (int dy = 0; dy < trunkH; dy++)
-            SetLog(lx, surfaceY + dy, lz, 23);
+        {
+            int ox = dy >= trunkH / 2 ? leanX : 0;
+            int oz = dy >= trunkH / 2 ? leanZ : 0;
+            SetLog(lx + ox, surfaceY + dy, lz + oz, 23);
+        }
 
-        for (int layer = 0; layer < 2; layer++)
+        int canopyLayers = 2 + (int)((hash >> 8) % 2); // 2-3
+        int canopyRadius = 2 + (int)((hash >> 10) % 2); // 2-3
+        for (int layer = 0; layer < canopyLayers; layer++)
         {
             int ly = surfaceY + trunkH - 1 + layer;
-            for (int dz = -2; dz <= 2; dz++)
-                for (int dx = -2; dx <= 2; dx++)
+            int r = layer == canopyLayers - 1 ? canopyRadius - 1 : canopyRadius;
+            for (int dz = -r; dz <= r; dz++)
+                for (int dx = -r; dx <= r; dx++)
                 {
-                    if (Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
-                    SetLeaf(lx + dx, ly, lz + dz, 24);
+                    if (Math.Abs(dx) == r && Math.Abs(dz) == r
+                        && ((hash >> 12) + (uint)(dx + dz)) % 2 == 0) continue;
+                    SetLeaf(lx + leanX + dx, ly, lz + leanZ + dz, 24);
                 }
         }
     }
 
-    /// <summary>Cherry: 4–5 block trunk, round 5×5 canopy with pink leaves.</summary>
+    /// <summary>Cherry: 4–8 block trunk, round canopy with varied shape.</summary>
     private void PlaceCherryTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 4 + (int)(hash % 2);
+        int trunkH = 4 + (int)(hash % 5); // 4-8
 
         for (int dy = 0; dy < trunkH; dy++)
             SetLog(lx, surfaceY + dy, lz, 25);
 
-        for (int layer = 0; layer < 3; layer++)
+        int crownLayers = 3 + (int)((hash >> 4) % 3); // 3-5
+        for (int layer = 0; layer < crownLayers; layer++)
         {
             int ly = surfaceY + trunkH - 2 + layer;
-            int radius = layer == 2 ? 1 : 2;
+            int radius = layer >= crownLayers - 1 ? 1 : (layer == 0 ? 2 + (int)((hash >> 7) % 2) : 2);
             for (int dz = -radius; dz <= radius; dz++)
                 for (int dx = -radius; dx <= radius; dx++)
                 {
-                    if (radius == 2 && Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
+                    if (radius >= 2 && Math.Abs(dx) == radius && Math.Abs(dz) == radius
+                        && ((hash >> 9) + (uint)(dx + dz)) % 3 == 0) continue;
                     SetLeaf(lx + dx, ly, lz + dz, 26);
                 }
         }
     }
 
-    /// <summary>Jungle: 8–11 block tall trunk, large rounded canopy at the top.</summary>
+    /// <summary>Jungle: 8–18 block tall trunk, large rounded canopy with variation.</summary>
     private void PlaceJungleTree(int treeWx, int treeWz, int surfaceY, uint hash)
     {
         int lx = treeWx - Position.X * Size;
         int lz = treeWz - Position.Z * Size;
-        int trunkH = 8 + (int)(hash % 4);
+        int trunkH = 8 + (int)(hash % 11); // 8-18
 
         for (int dy = 0; dy < trunkH; dy++)
             SetLog(lx, surfaceY + dy, lz, 27);
 
-        for (int layer = 0; layer < 4; layer++)
+        int crownLayers = 4 + (int)((hash >> 4) % 3); // 4-6
+        int maxRadius = 2 + (int)((hash >> 7) % 2); // 2-3
+        for (int layer = 0; layer < crownLayers; layer++)
         {
-            int ly = surfaceY + trunkH - 3 + layer;
-            int radius = layer < 2 ? 2 : layer == 2 ? 1 : 0;
+            int ly = surfaceY + trunkH - (crownLayers / 2) + layer;
+            int radius;
+            if (layer < crownLayers / 2) radius = maxRadius;
+            else if (layer < crownLayers - 1) radius = maxRadius - 1;
+            else radius = 0;
             for (int dz = -radius; dz <= radius; dz++)
                 for (int dx = -radius; dx <= radius; dx++)
                 {
-                    if (radius == 2 && Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
+                    if (radius >= 2 && Math.Abs(dx) == radius && Math.Abs(dz) == radius
+                        && ((hash >> 10) + (uint)(dx * 2 + dz)) % 3 == 0) continue;
                     SetLeaf(lx + dx, ly, lz + dz, 28);
                 }
         }
@@ -645,17 +707,19 @@ public class Chunk
     /// </summary>
     private void GenerateFlat()
     {
-        const int grassY = 5;
+        const int grassY = 64; // world-space grass level
+        int chunkWorldYMin = Position.Y * Size;
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
-                for (int y = 0; y < Size; y++)
+                for (int ly = 0; ly < Size; ly++)
                 {
+                    int wy = chunkWorldYMin + ly;
                     Block b;
-                    if (y > grassY) b = Block.Air;
-                    else if (y == grassY) b = new Block { Id = 3, IsTransparent = false, Layer = 16 };
-                    else if (y >= grassY - 3) b = new Block { Id = 1, IsTransparent = false, Layer = 16 };
+                    if (wy > grassY) b = Block.Air;
+                    else if (wy == grassY) b = new Block { Id = 3, IsTransparent = false, Layer = 16 };
+                    else if (wy >= grassY - 3) b = new Block { Id = 1, IsTransparent = false, Layer = 16 };
                     else b = new Block { Id = 2, IsTransparent = false, Layer = 16 };
-                    _blocks[Index(x, y, z)] = b;
+                    _blocks[Index(x, ly, z)] = b;
                 }
     }
 
