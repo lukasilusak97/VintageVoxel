@@ -24,7 +24,6 @@ public static class EntityRegistry
         _wheelSetups.Clear();
 
         string entitiesDir = Path.GetDirectoryName(entitiesJsonPath) ?? ".";
-        string setupDir = Path.Combine(entitiesDir, "Vehicles");
 
         var options = new JsonSerializerOptions
         {
@@ -40,7 +39,7 @@ public static class EntityRegistry
         {
             _defs[def.Id] = def;
 
-            string setupPath = Path.Combine(setupDir, def.Setup.ToLowerInvariant() + ".json");
+            string setupPath = Path.Combine(entitiesDir, def.Setup);
             if (!File.Exists(setupPath)) continue;
 
             string setupJson = File.ReadAllText(setupPath);

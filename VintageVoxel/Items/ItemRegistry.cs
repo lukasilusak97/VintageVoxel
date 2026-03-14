@@ -34,20 +34,36 @@ public static class ItemRegistry
         {
             ModelMesh? mesh = null;
             ItemType itemType = ItemType.Block;
+            string? modelRelPath = null;
 
             if (def.EntityId > 0)
             {
                 itemType = ItemType.Entity;
+                var entityDef = EntityRegistry.Get(def.EntityId);
+                if (entityDef?.Model != null)
+                {
+                    // Convert entity model path (e.g. "Models/Entities/X/x.json")
+                    // to renderer-relative path (e.g. "Entities/X/x") under Assets/Models/.
+                    string raw = entityDef.Model;
+                    if (raw.StartsWith("Models/", StringComparison.OrdinalIgnoreCase))
+                        raw = raw["Models/".Length..];
+                    if (raw.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                        raw = raw[..^5];
+                    modelRelPath = raw.ToLowerInvariant();
+                    string modelPath = Path.Combine(modelsDir, modelRelPath + ".json");
+                    VSModelLoader.TryLoad(modelPath, out mesh);
+                }
             }
             else if (!string.IsNullOrEmpty(def.Model))
             {
                 itemType = ItemType.Model;
-                string modelPath = Path.Combine(modelsDir, def.Model.ToLowerInvariant() + ".json");
+                modelRelPath = def.Model.ToLowerInvariant();
+                string modelPath = Path.Combine(modelsDir, modelRelPath + ".json");
                 VSModelLoader.TryLoad(modelPath, out mesh);
             }
 
             _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.BlockId,
-                                      itemType, mesh, def.EntityId);
+                                      itemType, mesh, def.EntityId, modelRelPath);
         }
     }
 

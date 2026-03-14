@@ -47,9 +47,17 @@ public class Item
     /// </summary>
     public ModelMesh? Mesh { get; }
 
+    /// <summary>
+    /// Relative model path (under <c>Assets/Models/</c>, without extension) for
+    /// <see cref="ItemType.Model"/> items. Used by <see cref="Rendering.EntityRenderer"/>
+    /// to look up models in its path-based cache.
+    /// </summary>
+    public string? ModelPath { get; }
+
     public Item(int id, string name, int maxStackSize, int blockId = 0,
                 ItemType type = ItemType.Block,
-                ModelMesh? mesh = null, int entityId = 0)
+                ModelMesh? mesh = null, int entityId = 0,
+                string? modelPath = null)
     {
         Id = id;
         Name = name;
@@ -58,5 +66,6 @@ public class Item
         Type = type;
         Mesh = mesh;
         EntityId = entityId;
+        ModelPath = modelPath;
     }
 }

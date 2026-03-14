@@ -3,12 +3,14 @@
         "id": 1,
         "name": "Buggie Body",
         "type": "vehicleBody",
-        "setup": "buggie"
+        "model": "Models/Entities/BuggieBody/buggie_body.json",
+        "setup": "Vehicles/buggie.json"
     },
     {
         "id": 2,
         "name": "Buggie Wheel",
         "type": "vehicleWheel",
-        "setup": "buggie_wheel"
+        "model": "Models/Entities/BuggieWheel/buggie_wheel.json",
+        "setup": "Vehicles/buggie_wheel.json"
     }
 ]

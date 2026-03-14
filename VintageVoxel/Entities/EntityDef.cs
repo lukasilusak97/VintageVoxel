@@ -12,5 +12,8 @@ public sealed record EntityDef(
     /// <summary>Entity category: "vehicle", etc.</summary>
     string Type,
 
-    /// <summary>Setup file name (without extension) inside Assets/Entities/.</summary>
+    /// <summary>Model JSON path relative to Assets/, e.g. "Models/Entities/BuggieBody/buggie_body.json".</summary>
+    string? Model,
+
+    /// <summary>Setup JSON path relative to Assets/, e.g. "Vehicles/buggie.json".</summary>
     string Setup);

@@ -1,0 +1,89 @@
+{
+    "textureWidth": 4,
+    "textureHeight": 4,
+    "textures": {
+        "skin": "player",
+        "shirt": "player",
+        "pants": "player"
+    },
+    "elements": [
+        {
+            "name": "Head",
+            "from": [ -5, 24, -5 ],
+            "to": [ 5, 34, 5 ],
+            "faces": {
+                "north": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "south": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "east": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "west": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "up": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "down": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" }
+            }
+        },
+        {
+            "name": "Body",
+            "from": [ -4, 12, -2 ],
+            "to": [ 4, 24, 2 ],
+            "faces": {
+                "north": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" },
+                "south": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" },
+                "east": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" },
+                "west": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" },
+                "up": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" },
+                "down": { "uv": [ 2, 0, 3, 1 ], "texture": "#shirt" }
+            }
+        },
+        {
+            "name": "LeftArm",
+            "from": [ -8, 12, -2 ],
+            "to": [ -4, 24, 2 ],
+            "faces": {
+                "north": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "south": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "east": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "west": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "up": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "down": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" }
+            }
+        },
+        {
+            "name": "RightArm",
+            "from": [ 4, 12, -2 ],
+            "to": [ 8, 24, 2 ],
+            "faces": {
+                "north": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "south": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "east": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "west": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "up": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" },
+                "down": { "uv": [ 0, 0, 1, 1 ], "texture": "#skin" }
+            }
+        },
+        {
+            "name": "LeftLeg",
+            "from": [ -4, 0, -2 ],
+            "to": [ 0, 12, 2 ],
+            "faces": {
+                "north": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "south": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "east": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "west": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "up": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "down": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" }
+            }
+        },
+        {
+            "name": "RightLeg",
+            "from": [ 0, 0, -2 ],
+            "to": [ 4, 12, 2 ],
+            "faces": {
+                "north": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "south": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "east": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "west": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "up": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" },
+                "down": { "uv": [ 0, 2, 1, 3 ], "texture": "#pants" }
+            }
+        }
+    ]
+}

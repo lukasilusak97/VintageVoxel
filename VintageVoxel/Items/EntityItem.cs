@@ -4,7 +4,7 @@ namespace VintageVoxel;
 
 /// <summary>
 /// A physical dropped-item entity in the world.
-/// Rendered as a small spinning textured quad by <see cref="EntityItemRenderer"/>.
+/// Rendered as a small spinning textured quad by <see cref="Rendering.EntityRenderer"/>.
 /// Collected automatically when the player walks within <see cref="PickupRadius"/> units.
 /// </summary>
 public class EntityItem

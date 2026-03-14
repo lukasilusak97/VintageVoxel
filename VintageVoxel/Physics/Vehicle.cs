@@ -12,7 +12,7 @@ namespace VintageVoxel.Physics;
 /// <summary>
 /// High-level vehicle that owns the Bepu v2 <see cref="Simulation"/>,
 /// <see cref="VehicleChassis"/>, <see cref="RaycastSuspension"/>,
-/// <see cref="VehicleController"/>, and the visual <see cref="VehicleRenderer"/>.
+/// <see cref="VehicleController"/>, and the visual <see cref="Rendering.EntityRenderer"/>.
 ///
 /// Vehicles are built piece by piece: a body is placed first (no wheels),
 /// then wheels are attached to predefined slots. Physics only runs when at
@@ -31,7 +31,7 @@ public sealed class Vehicle : IDisposable
     private readonly IVoxelPhysicsQuery _query;
 
     // Rendering
-    private readonly VehicleRenderer _renderer;
+    private readonly EntityRenderer _renderer;
     private readonly VehicleSetup? _setup;
 
     // Assembly tracking
@@ -114,7 +114,7 @@ public sealed class Vehicle : IDisposable
         return copy;
     }
 
-    public Vehicle(World world, Vector3 spawnPosition, VehicleRenderer renderer,
+    public Vehicle(World world, Vector3 spawnPosition, EntityRenderer renderer,
                    VehicleSetup? setup = null, int bodyEntityId = 0)
     {
         _renderer = renderer;
@@ -254,11 +254,31 @@ public sealed class Vehicle : IDisposable
     }
 
     /// <summary>Draws the vehicle model, advancing any keyframe animations by <paramref name="deltaTime"/>.</summary>
-    public void Render(Camera camera, float deltaTime = 0f)
+    public void Render(Shader shader, Camera camera, float deltaTime = 0f)
     {
-        _renderer.Render(Position, Orientation, camera, _setup,
-                         GetWheelOffsetsWorld(), WheelModelPath,
-                         _suspension.ActiveMask, deltaTime);
+        if (_setup?.BodyModel == null) return;
+
+        var pos = MathConversions.ToOpenTK(Position);
+        var rot = MathConversions.ToOpenTK(Orientation);
+        var worldRot = OpenTK.Mathematics.Matrix4.CreateFromQuaternion(rot);
+        var worldTrans = OpenTK.Mathematics.Matrix4.CreateTranslation(pos);
+
+        // Body
+        var bodyMatrix = worldRot * worldTrans;
+        _renderer.RenderModel(shader, _setup.BodyModel, ref bodyMatrix, deltaTime);
+
+        // Wheels
+        string? wheelPath = WheelModelPath;
+        if (wheelPath == null) return;
+
+        var wheelOffsets = GetWheelOffsetsWorld();
+        for (int i = 0; i < wheelOffsets.Length; i++)
+        {
+            if (!_suspension.ActiveMask[i]) continue;
+            var wheelPos = MathConversions.ToOpenTK(wheelOffsets[i]);
+            var wheelMatrix = worldRot * OpenTK.Mathematics.Matrix4.CreateTranslation(wheelPos);
+            _renderer.RenderModel(shader, wheelPath, ref wheelMatrix, deltaTime);
+        }
     }
 
     public void Dispose()

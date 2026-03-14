@@ -1,6 +1,5 @@
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
-using StbImageSharp;
 
 namespace VintageVoxel.Rendering;
 
@@ -13,12 +12,8 @@ namespace VintageVoxel.Rendering;
 /// </summary>
 public sealed class WorldRenderer : IDisposable
 {
-    // GPU handle bundle for one loaded item model.
-    private readonly record struct ModelGpu(GpuMesh Mesh, int TexHandle);
-
     private readonly Dictionary<Vector3i, GpuMesh> _chunkGpuData = new();
     private readonly Dictionary<Vector3i, GpuMesh> _chunkTransGpuData = new();
-    private readonly Dictionary<int, ModelGpu> _modelGpu = new();
     private readonly Dictionary<Vector3i, EntityItem> _placedModels = new();
 
     private readonly GpuResourceManager _gpu;
@@ -27,7 +22,7 @@ public sealed class WorldRenderer : IDisposable
     private readonly Shader _shadowShader;
     private readonly Shader _waterShader;
     private readonly Texture _atlas;
-    private readonly EntityItemRenderer _entityRenderer;
+    private readonly EntityRenderer _entityRenderer;
     private readonly Inventory _inventory;
     private readonly ChunkBorderRenderer _borders;
 
@@ -56,7 +51,7 @@ public sealed class WorldRenderer : IDisposable
     public int ChunkCount => _chunkGpuData.Count;
 
     public WorldRenderer(GpuResourceManager gpu, World world, Shader shader, Texture atlas,
-                         EntityItemRenderer entityRenderer, Inventory inventory)
+                         EntityRenderer entityRenderer, Inventory inventory)
     {
         _gpu = gpu;
         _world = world;
@@ -260,43 +255,7 @@ public sealed class WorldRenderer : IDisposable
                 }
     }
 
-    // -------------------------------------------------------------------------
-    // Model GPU cache
-    // -------------------------------------------------------------------------
 
-    private ModelGpu GetOrCreateModelGpu(Item item)
-    {
-        if (_modelGpu.TryGetValue(item.Id, out var cached)) return cached;
-
-        var mesh = item.Mesh!;
-        var gpuMesh = _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 7);
-
-        int texHandle = 0;
-        if (mesh.TexturePng is { Length: > 0 } pngBytes)
-        {
-            ImageResult img = ImageResult.FromMemory(pngBytes, ColorComponents.RedGreenBlueAlpha);
-            int tex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, tex);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                          img.Width, img.Height, 0,
-                          PixelFormat.Rgba, PixelType.UnsignedByte, img.Data);
-            GL.TexParameter(TextureTarget.Texture2D,
-                TextureParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
-            GL.TexParameter(TextureTarget.Texture2D,
-                TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-            GL.TexParameter(TextureTarget.Texture2D,
-                TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-            GL.TexParameter(TextureTarget.Texture2D,
-                TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-            GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
-            GL.BindTexture(TextureTarget.Texture2D, 0);
-            texHandle = tex;
-        }
-
-        var entry = new ModelGpu(gpuMesh, texHandle);
-        _modelGpu[item.Id] = entry;
-        return entry;
-    }
 
     // ── Shadow pass ───────────────────────────────────────────────────────────
 
@@ -349,7 +308,7 @@ public sealed class WorldRenderer : IDisposable
 
         // --- Floating entity items (dropped picks, etc.) ---
         if (entityItems.Count > 0)
-            _entityRenderer.Render(entityItems, _shadowShader, _atlas.Handle);
+            _entityRenderer.RenderEntityItems(entityItems, _shadowShader, _atlas.Handle);
 
         // Restore atlas on unit 0 for subsequent passes.
         GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
@@ -413,12 +372,7 @@ public sealed class WorldRenderer : IDisposable
         Profiler.End("Chunk Draw");
 
         Profiler.Begin("Entity Render");
-        _entityRenderer.Render(entityItems, _shader, _atlas.Handle, item =>
-        {
-            if (item.Mesh == null) return null;
-            var mg = GetOrCreateModelGpu(item);
-            return (mg.Mesh.Vao, mg.Mesh.IndexCount, mg.TexHandle);
-        });
+        _entityRenderer.RenderEntityItems(entityItems, _shader, _atlas.Handle);
         if (_placedModels.Count > 0)
             RenderPlacedModels(frustum);
         Profiler.End("Entity Render");
@@ -517,42 +471,25 @@ public sealed class WorldRenderer : IDisposable
 
     private void RenderPlacedModels(Frustum frustum)
     {
-        GL.Disable(EnableCap.CullFace);
-
         foreach (var (blockPos, entity) in _placedModels)
         {
-            // Frustum cull individual placed models (1-block AABB).
             var min = new Vector3(blockPos.X, blockPos.Y, blockPos.Z);
             var max = new Vector3(blockPos.X + 1f, blockPos.Y + 1f, blockPos.Z + 1f);
             if (!frustum.ContainsAabb(min, max)) continue;
 
             var item = entity.Item;
-            if (item.Mesh is null) continue;
-
-            ModelGpu mg = GetOrCreateModelGpu(item);
-
-            if (mg.TexHandle != 0)
-            {
-                GL.ActiveTexture(TextureUnit.Texture0);
-                GL.BindTexture(TextureTarget.Texture2D, mg.TexHandle);
-            }
+            if (item.ModelPath is null) continue;
 
             var model = Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
-            _shader.SetMatrix4("model", ref model);
-
-            GL.BindVertexArray(mg.Mesh.Vao);
-            GL.DrawElements(PrimitiveType.Triangles, mg.Mesh.IndexCount,
-                            DrawElementsType.UnsignedInt, 0);
+            _entityRenderer.RenderModel(_shader, item.ModelPath, ref model);
         }
 
-        GL.BindVertexArray(0);
-        GL.Enable(EnableCap.CullFace);
         _atlas.Use(TextureUnit.Texture0);
     }
 
     /// <summary>
     /// Renders each occupied hotbar slot as a spinning 3-D mini item by reusing
-    /// <see cref="EntityItemRenderer"/>. A tiny GL viewport is set per slot.
+    /// <see cref="EntityRenderer"/>. A tiny GL viewport is set per slot.
     /// Must be called AFTER the 2-D HUD backgrounds so items appear on top.
     /// </summary>
     public void RenderHotbarItems3D(int fbWidth, int fbHeight)
@@ -583,13 +520,6 @@ public sealed class WorldRenderer : IDisposable
         GL.Disable(EnableCap.CullFace);
         GL.Enable(EnableCap.ScissorTest);
 
-        Func<Item, (int Vao, int IndexCount, int TexHandle)?> gpuGetter = item =>
-        {
-            if (item.Mesh == null) return null;
-            var mg = GetOrCreateModelGpu(item);
-            return (mg.Mesh.Vao, mg.Mesh.IndexCount, mg.TexHandle);
-        };
-
         for (int i = 0; i < count; i++)
         {
             var stack = _inventory.Slots[i];
@@ -605,7 +535,7 @@ public sealed class WorldRenderer : IDisposable
             {
                 SpinAngle = MathF.PI / 4f
             };
-            _entityRenderer.Render(_hudSlot, _shader, _atlas.Handle, gpuGetter);
+            _entityRenderer.RenderEntityItems(_hudSlot, _shader, _atlas.Handle);
         }
 
         GL.Disable(EnableCap.ScissorTest);
@@ -648,16 +578,8 @@ public sealed class WorldRenderer : IDisposable
         _shader.SetMatrix4("projection", ref miniProj);
         _shader.SetMatrix4("view", ref miniView);
 
-        GL.Disable(EnableCap.DepthTest);
         GL.Disable(EnableCap.CullFace);
         GL.Enable(EnableCap.ScissorTest);
-
-        Func<Item, (int Vao, int IndexCount, int TexHandle)?> gpuGetter = item =>
-        {
-            if (item.Mesh == null) return null;
-            var mg = GetOrCreateModelGpu(item);
-            return (mg.Mesh.Vao, mg.Mesh.IndexCount, mg.TexHandle);
-        };
 
         foreach (var (stack, dispX, dispY, dispSize) in targets)
         {
@@ -673,11 +595,45 @@ public sealed class WorldRenderer : IDisposable
             GL.Scissor(vx, vy, innerSize, innerSize);
             GL.Viewport(vx, vy, innerSize, innerSize);
 
-            _hudSlot[0] = new EntityItem(stack.Item, stack.Count, Vector3.Zero)
+            // Clear depth per slot so each item renders independently.
+            GL.Enable(EnableCap.DepthTest);
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+
+            var item = stack.Item;
+
+            // Model/Entity items: render directly with bounding-box fitting.
+            if ((item.Type == ItemType.Model || item.Type == ItemType.Entity)
+                && item.ModelPath != null)
+            {
+                var modelMat = Matrix4.Identity;
+                if (_entityRenderer.TryGetModelBounds(item.ModelPath, out var bMin, out var bMax))
+                {
+                    var centre = (bMin + bMax) * 0.5f;
+                    var size = bMax - bMin;
+                    float maxDim = MathF.Max(size.X, MathF.Max(size.Y, size.Z));
+                    float fitScale = maxDim > 0f ? 0.7f / maxDim : 1f;
+                    modelMat = Matrix4.CreateTranslation(-centre) *
+                               Matrix4.CreateScale(fitScale);
+                }
+                modelMat *= Matrix4.CreateRotationX(MathF.PI / 8f) *
+                            Matrix4.CreateRotationY(MathF.PI / 4f) *
+                            Matrix4.CreateTranslation(target);
+
+                _entityRenderer.RenderModel(_shader, item.ModelPath, ref modelMat);
+
+                // Restore atlas for subsequent block items.
+                _atlas.Use(TextureUnit.Texture0);
+                _shader.SetInt("uNoTexture", 0);
+                continue;
+            }
+
+            // Block items: render via RenderEntityItems (mini textured cube).
+            GL.Disable(EnableCap.DepthTest);
+            _hudSlot[0] = new EntityItem(item, stack.Count, Vector3.Zero)
             {
                 SpinAngle = MathF.PI / 4f
             };
-            _entityRenderer.Render(_hudSlot, _shader, _atlas.Handle, gpuGetter);
+            _entityRenderer.RenderEntityItems(_hudSlot, _shader, _atlas.Handle);
         }
 
         GL.Disable(EnableCap.ScissorTest);
@@ -700,13 +656,6 @@ public sealed class WorldRenderer : IDisposable
         foreach (var gpu in _chunkTransGpuData.Values)
             _gpu.Free(gpu);
         _chunkTransGpuData.Clear();
-
-        foreach (var mg in _modelGpu.Values)
-        {
-            _gpu.Free(mg.Mesh);
-            if (mg.TexHandle != 0) GL.DeleteTexture(mg.TexHandle);
-        }
-        _modelGpu.Clear();
 
         _borders.Dispose();
         _shadowShader.Dispose();

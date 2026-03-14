@@ -54,14 +54,13 @@ public class Game : GameWindow
     private readonly CreativeInventoryWindow _creativeWindow = new();
     private readonly List<(ItemStack Stack, float DispX, float DispY, float Size)> _hotbarRenderTargets = new();
     private readonly List<EntityItem> _entityItems = new();
-    private EntityItemRenderer _entityRenderer = null!;
+    private EntityRenderer _entityRenderer = null!;
 
     private WorldRenderer? _worldRenderer;
     private WorldStreamer? _worldStreamer;
     private InteractionHandler? _interaction;
 
     // ─── Vehicle ───────────────────────────────────────────────────────────
-    private VehicleRenderer _vehicleRenderer = null!;
     private VehicleDebugRenderer _vehicleDebugRenderer = null!;
     private readonly List<Vehicle> _vehicles = new();
 
@@ -73,7 +72,6 @@ public class Game : GameWindow
     private GameClient? _gameClient;
     private readonly LanDiscovery _lanDiscovery = new();
     private readonly Dictionary<int, RemotePlayer> _remotePlayers = new();
-    private RemotePlayerRenderer _remotePlayerRenderer = null!;
     private readonly ChatWindow _chatWindow = new();
 
     // Multiplayer menu form state
@@ -125,15 +123,12 @@ public class Game : GameWindow
         _debugWindow = new DebugWindow();
         _debugState = new DebugState();
 
-        _remotePlayerRenderer = new RemotePlayerRenderer();
         _playerName = WorldPersistence.LoadPlayerName("Player");
 
-        ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
         EntityRegistry.Load(Path.Combine(assetsDir, "entities.json"));
+        ItemRegistry.Load(Path.Combine(assetsDir, "items.json"));
 
-        _entityRenderer = new EntityItemRenderer(_gpuResources);
-
-        _vehicleRenderer = new VehicleRenderer();
+        _entityRenderer = new EntityRenderer(_gpuResources);
         _vehicleDebugRenderer = new VehicleDebugRenderer();
     }
 
@@ -253,16 +248,15 @@ public class Game : GameWindow
             float dt = (float)args.Time;
             foreach (var v in _vehicles)
             {
-                v.Render(_camera, dt);
+                v.Render(_shader, _camera, dt);
                 if (_debugState.ShowVehicleDebug)
                     _vehicleDebugRenderer.Render(v, _camera);
             }
         }
 
-        // Render remote player box-man models (before ImGui so tags draw over them).
+        // Render remote player models (before ImGui so tags draw over them).
         if (_gameState == GameState.Playing && _remotePlayers.Count > 0)
-            _remotePlayerRenderer.Render(_remotePlayers.Values, _camera,
-                                         FramebufferSize.X, FramebufferSize.Y);
+            _entityRenderer.RenderRemotePlayers(_remotePlayers.Values, _shader);
 
         Profiler.Begin("HUD");
         if (_gameState == GameState.Playing)
@@ -303,7 +297,7 @@ public class Game : GameWindow
         if (_gameState == GameState.Playing && _gameClient != null)
         {
             _chatWindow.Draw((float)args.Time, ImGui.GetIO().DisplaySize.X, ImGui.GetIO().DisplaySize.Y);
-            _remotePlayerRenderer.RenderNameTags(_remotePlayers.Values, _camera,
+            _entityRenderer.RenderNameTags(_remotePlayers.Values, _camera,
                                                   FramebufferSize.X, FramebufferSize.Y);
         }
 
@@ -475,9 +469,7 @@ public class Game : GameWindow
         foreach (var v in _vehicles)
             v.Dispose();
         _vehicles.Clear();
-        _vehicleRenderer?.Dispose();
         _vehicleDebugRenderer?.Dispose();
-        _remotePlayerRenderer?.Dispose();
         _worldRenderer?.Dispose();
         _atlas.Dispose();
         _shader.Dispose();
@@ -503,7 +495,7 @@ public class Game : GameWindow
         {
             var setup = EntityRegistry.GetVehicleSetup(entityId);
             var spawnPos = new SNVector3(position.X, position.Y, position.Z);
-            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer, setup, entityId));
+            _vehicles.Add(new Vehicle(_world, spawnPos, _entityRenderer, setup, entityId));
         }
     }
 
