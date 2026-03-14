@@ -148,9 +148,17 @@ public sealed class WorldStreamer
         }
 
         // Drain deferred mesh rebuilds only once lighting is complete.
+        // Sort by distance so chunks nearest the player are meshed first.
         if (!LightEngine.HasPendingStreamLight && _pendingMeshRebuild.Count > 0)
         {
             Profiler.Begin("Chunk Stream: Mesh Upload");
+            Vector2i pc = World.WorldToChunk(playerPos);
+            _pendingMeshRebuild.Sort((a, b) =>
+            {
+                int dA = Math.Abs(a.X - pc.X) + Math.Abs(a.Z - pc.Y);
+                int dB = Math.Abs(b.X - pc.X) + Math.Abs(b.Z - pc.Y);
+                return dA.CompareTo(dB);
+            });
             int meshCount = Math.Min(_pendingMeshRebuild.Count, MaxMeshRebuildsPerFrame);
             for (int i = 0; i < meshCount; i++)
                 _renderer.RebuildChunk(_pendingMeshRebuild[i]);

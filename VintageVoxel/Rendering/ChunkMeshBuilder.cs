@@ -10,7 +10,7 @@ namespace VintageVoxel;
 ///   float u, v           — texture atlas UV coordinates
 ///   float sunLight       — sky-light level [0,1], attenuated by face direction
 ///   float blockLight     — emitter-light level [0,1] (torches etc.)
-///   float ao             — ambient occlusion factor [0.4, 1.0]
+///   float ao             -- ambient occlusion factor [0.625, 1.0]
 ///
 /// Separating sunLight from blockLight lets the fragment shader apply different
 /// color temperatures: a cool white for sunlight and a warm orange for torches.
@@ -46,7 +46,7 @@ public readonly struct ChunkMesh
 ///   sunLight         — smooth sky-light [0,1] averaged from 4 corner voxels,
 ///                      then attenuated by a per-face directional factor
 ///   blockLight       — smooth emitter-light [0,1] averaged from 4 corner voxels
-///   ao               — ambient occlusion factor per vertex corner [0.4, 1.0]
+///   ao               — ambient occlusion factor per vertex corner [0.625, 1.0]
 ///
 /// SMOOTH LIGHTING:
 ///   For each vertex corner of a quad, light is averaged across the four voxels
@@ -203,8 +203,8 @@ public static class ChunkMeshBuilder
                         // Check which horizontal neighbours lack water (shore edges).
                         bool shoreNorth = !GetNeighbour(x, y, z - 1, chunk, world).HasWater;
                         bool shoreSouth = !GetNeighbour(x, y, z + 1, chunk, world).HasWater;
-                        bool shoreWest  = !GetNeighbour(x - 1, y, z, chunk, world).HasWater;
-                        bool shoreEast  = !GetNeighbour(x + 1, y, z, chunk, world).HasWater;
+                        bool shoreWest = !GetNeighbour(x - 1, y, z, chunk, world).HasWater;
+                        bool shoreEast = !GetNeighbour(x + 1, y, z, chunk, world).HasWater;
                         // Diagonal neighbours for corner foam.
                         bool shoreNW = !GetNeighbour(x - 1, y, z - 1, chunk, world).HasWater;
                         bool shoreNE = !GetNeighbour(x + 1, y, z - 1, chunk, world).HasWater;
@@ -389,7 +389,7 @@ public static class ChunkMeshBuilder
             if (IsSolid(bx + ox, by + oy, bz + oz, chunk, world))
                 solidCount++;
         }
-        ao = solidCount switch { 0 => 1.0f, 1 => 0.8f, 2 => 0.6f, _ => 0.4f };
+        ao = solidCount switch { 0 => 1.0f, 1 => 0.875f, 2 => 0.75f, _ => 0.625f };
 
         SampleSmoothLight(bx, by, bz, face, vertex, chunk, world, out float sv, out float bv);
         sun = sv * dirScale;

@@ -4,7 +4,7 @@
 in vec2  vTexCoord;
 in float vSunLight;    // sky-light level [0,1]
 in float vBlockLight;  // emitter-light level [0,1]
-in float vAo;          // ambient occlusion [0.4,1.0]
+in float vAo;          // ambient occlusion [0.625,1.0]
 in float vViewDist;    // eye-space depth for fog
 in vec4  vShadowCoord; // fragment position in light clip-space
 

@@ -100,17 +100,24 @@ public class World
 
         // Generate missing chunks within the render square, across all vertical layers.
         // Rate-limited to avoid frame spikes from noise-based terrain generation.
+        // Build a list of missing columns sorted by Manhattan distance from the player
+        // so nearby chunks are generated first.
         int generated = 0;
-        for (int dz = -RenderDistance; dz <= RenderDistance && generated < MaxChunkGenPerFrame; dz++)
-            for (int dx = -RenderDistance; dx <= RenderDistance && generated < MaxChunkGenPerFrame; dx++)
-                for (int cy = 0; cy < MaxChunkY && generated < MaxChunkGenPerFrame; cy++)
+        for (int dist = 0; dist <= RenderDistance && generated < MaxChunkGenPerFrame; dist++)
+            for (int dz = -dist; dz <= dist && generated < MaxChunkGenPerFrame; dz++)
+                for (int dx = -dist; dx <= dist && generated < MaxChunkGenPerFrame; dx++)
                 {
-                    var key = new Vector3i(center.X + dx, cy, center.Y + dz);
-                    if (!_chunks.ContainsKey(key))
+                    // Only process the ring at this distance, skip interior (already handled).
+                    if (Math.Abs(dx) != dist && Math.Abs(dz) != dist) continue;
+                    for (int cy = 0; cy < MaxChunkY && generated < MaxChunkGenPerFrame; cy++)
                     {
-                        _chunks[key] = new Chunk(key);
-                        added.Add(key);
-                        generated++;
+                        var key = new Vector3i(center.X + dx, cy, center.Y + dz);
+                        if (!_chunks.ContainsKey(key))
+                        {
+                            _chunks[key] = new Chunk(key);
+                            added.Add(key);
+                            generated++;
+                        }
                     }
                 }
 

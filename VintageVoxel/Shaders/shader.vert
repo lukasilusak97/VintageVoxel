@@ -7,7 +7,7 @@
 //    [1]  vec2  aTexCoord
 //    [2]  float aSunLight    - sky-light level [0,1], pre-attenuated by face direction
 //    [3]  float aBlockLight  - emitter-light level [0,1] (torches etc.)
-//    [4]  float aAo          - ambient occlusion factor [0.4, 1.0]
+//    [4]  float aAo          - ambient occlusion factor [0.625, 1.0]
 //
 //  stride 7 (entities / models):
 //    same layout, except aBlockLight (location 3) is driven from the constant
@@ -17,7 +17,7 @@ layout(location = 0) in vec3  aPosition;
 layout(location = 1) in vec2  aTexCoord;
 layout(location = 2) in float aSunLight;   // sky / directional light [0,1]
 layout(location = 3) in float aBlockLight; // emitter light [0,1]
-layout(location = 4) in float aAo;         // ambient occlusion [0.4,1]
+layout(location = 4) in float aAo;         // ambient occlusion [0.625,1]
 
 uniform mat4 model;
 uniform mat4 view;
