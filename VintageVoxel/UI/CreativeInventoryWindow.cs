@@ -86,7 +86,7 @@ public sealed class CreativeInventoryWindow
 
         ImGui.Begin("Creative##vv_creative", Flags);
 
-        ImGui.TextColored(new Vector4(0.90f, 0.75f, 0.20f, 1f), "Creative Items");
+        ImGui.TextColored(new Vector4(0.518f, 0.773f, 0.784f, 1f), "Creative Items");
         ImGui.Separator();
         ImGui.Spacing();
 

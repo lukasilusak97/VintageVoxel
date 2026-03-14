@@ -22,6 +22,9 @@ public sealed class InteractionHandler
     private readonly List<Vehicle> _vehicles;
     private readonly string _savePath;
 
+    /// <summary>Func that returns true when the player is in creative mode (items are not consumed on placement).</summary>
+    public Func<bool>? IsCreativeMode { get; set; }
+
     /// <summary>
     /// When set, block actions are sent to the server for authoritative
     /// application. The server response will update the local world via
@@ -127,6 +130,8 @@ public sealed class InteractionHandler
 
         var blockPos = new Vector3i(wx, wy, wz);
 
+        bool creative = IsCreativeMode?.Invoke() ?? false;
+
         if (held.Item!.Type == ItemType.Entity)
         {
             // Wheel items can only be attached to placed vehicle bodies, not placed standalone.
@@ -135,7 +140,7 @@ public sealed class InteractionHandler
                 return;
 
             var item = held.Item;
-            _inventory.RemoveItem(item, 1);
+            if (!creative) _inventory.RemoveItem(item, 1);
             var spawnPos = new Vector3(wx + 0.5f, wy + 1.0f, wz + 0.5f);
             OnEntitySpawn?.Invoke(item.EntityId, spawnPos);
             return;
@@ -144,7 +149,7 @@ public sealed class InteractionHandler
         if (held.Item!.Type == ItemType.Model)
         {
             var item = held.Item;
-            _inventory.RemoveItem(item, 1);
+            if (!creative) _inventory.RemoveItem(item, 1);
             _world.SetBlock(wx, wy, wz, new Block { Id = (ushort)item.Id, IsTransparent = true, Layer = 16 });
             LightEngine.UpdateAtBlock(blockPos, _world);
             _renderer.AddPlacedModel(blockPos, item);
@@ -154,7 +159,7 @@ public sealed class InteractionHandler
         }
 
         ushort id = (ushort)held.Item!.Id;
-        _inventory.RemoveItem(held.Item!, 1);
+        if (!creative) _inventory.RemoveItem(held.Item!, 1);
         _world.SetBlock(wx, wy, wz, new Block { Id = id, IsTransparent = false, Layer = 16 });
         LightEngine.UpdateAtBlock(blockPos, _world);
         _renderer.RebuildAffectedChunks(blockPos);

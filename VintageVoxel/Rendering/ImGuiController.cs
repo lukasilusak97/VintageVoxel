@@ -47,6 +47,8 @@ public sealed class ImGuiController : IDisposable
         var io = ImGui.GetIO();
         io.Fonts.AddFontDefault();
 
+        ApplyGameStyle();
+
         // Tell ImGui the renderer supports VtxOffset in draw commands so it can
         // emit geometry that exceeds 65k vertices per draw list (required for
         // GL.DrawElementsBaseVertex).
@@ -417,6 +419,75 @@ public sealed class ImGuiController : IDisposable
     };
 
     // -------------------------------------------------------------------------
+
+    private static void ApplyGameStyle()
+    {
+        var style = ImGui.GetStyle();
+
+        // #84C5C8 → (0.518, 0.773, 0.784)
+        var accent = new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.00f);
+        var accentDim = new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 0.70f);
+        var accentBright = new System.Numerics.Vector4(0.62f, 0.86f, 0.87f, 1.00f);
+
+        // No roundings
+        style.WindowRounding = 0f;
+        style.ChildRounding = 0f;
+        style.FrameRounding = 0f;
+        style.PopupRounding = 0f;
+        style.ScrollbarRounding = 0f;
+        style.GrabRounding = 0f;
+        style.TabRounding = 0f;
+
+        style.WindowBorderSize = 1f;
+        style.FrameBorderSize = 0f;
+        style.WindowPadding = new System.Numerics.Vector2(10f, 10f);
+        style.FramePadding = new System.Numerics.Vector2(6f, 4f);
+        style.ItemSpacing = new System.Numerics.Vector2(8f, 6f);
+
+        var colors = style.Colors;
+        colors[(int)ImGuiCol.Text] = new(0.92f, 0.93f, 0.94f, 1.00f);
+        colors[(int)ImGuiCol.TextDisabled] = new(0.50f, 0.52f, 0.53f, 1.00f);
+        colors[(int)ImGuiCol.WindowBg] = new(0.08f, 0.09f, 0.10f, 0.94f);
+        colors[(int)ImGuiCol.ChildBg] = new(0.08f, 0.09f, 0.10f, 0.00f);
+        colors[(int)ImGuiCol.PopupBg] = new(0.10f, 0.11f, 0.12f, 0.96f);
+        colors[(int)ImGuiCol.Border] = new(0.28f, 0.30f, 0.31f, 0.60f);
+        colors[(int)ImGuiCol.BorderShadow] = new(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[(int)ImGuiCol.FrameBg] = new(0.14f, 0.15f, 0.16f, 1.00f);
+        colors[(int)ImGuiCol.FrameBgHovered] = new(0.20f, 0.22f, 0.23f, 1.00f);
+        colors[(int)ImGuiCol.FrameBgActive] = accentDim;
+        colors[(int)ImGuiCol.TitleBg] = new(0.06f, 0.07f, 0.08f, 1.00f);
+        colors[(int)ImGuiCol.TitleBgActive] = new(0.10f, 0.11f, 0.12f, 1.00f);
+        colors[(int)ImGuiCol.TitleBgCollapsed] = new(0.06f, 0.07f, 0.08f, 0.60f);
+        colors[(int)ImGuiCol.MenuBarBg] = new(0.10f, 0.11f, 0.12f, 1.00f);
+        colors[(int)ImGuiCol.ScrollbarBg] = new(0.08f, 0.09f, 0.10f, 0.80f);
+        colors[(int)ImGuiCol.ScrollbarGrab] = new(0.28f, 0.30f, 0.31f, 1.00f);
+        colors[(int)ImGuiCol.ScrollbarGrabHovered] = accentDim;
+        colors[(int)ImGuiCol.ScrollbarGrabActive] = accent;
+        colors[(int)ImGuiCol.CheckMark] = accent;
+        colors[(int)ImGuiCol.SliderGrab] = accentDim;
+        colors[(int)ImGuiCol.SliderGrabActive] = accent;
+        colors[(int)ImGuiCol.Button] = new(0.16f, 0.18f, 0.19f, 1.00f);
+        colors[(int)ImGuiCol.ButtonHovered] = accentDim;
+        colors[(int)ImGuiCol.ButtonActive] = accent;
+        colors[(int)ImGuiCol.Header] = new(0.16f, 0.18f, 0.19f, 1.00f);
+        colors[(int)ImGuiCol.HeaderHovered] = accentDim;
+        colors[(int)ImGuiCol.HeaderActive] = accent;
+        colors[(int)ImGuiCol.Separator] = new(0.28f, 0.30f, 0.31f, 0.60f);
+        colors[(int)ImGuiCol.SeparatorHovered] = accentDim;
+        colors[(int)ImGuiCol.SeparatorActive] = accent;
+        colors[(int)ImGuiCol.ResizeGrip] = new(0.28f, 0.30f, 0.31f, 0.40f);
+        colors[(int)ImGuiCol.ResizeGripHovered] = accentDim;
+        colors[(int)ImGuiCol.ResizeGripActive] = accent;
+        colors[(int)ImGuiCol.Tab] = new(0.14f, 0.15f, 0.16f, 1.00f);
+        colors[(int)ImGuiCol.TabHovered] = accentDim;
+        colors[(int)ImGuiCol.TabActive] = accent;
+        colors[(int)ImGuiCol.TextSelectedBg] = new(0.518f, 0.773f, 0.784f, 0.35f);
+        colors[(int)ImGuiCol.NavHighlight] = accent;
+        colors[(int)ImGuiCol.PlotLines] = accentBright;
+        colors[(int)ImGuiCol.PlotLinesHovered] = accent;
+        colors[(int)ImGuiCol.PlotHistogram] = accentBright;
+        colors[(int)ImGuiCol.PlotHistogramHovered] = accent;
+    }
 
     public void Dispose()
     {

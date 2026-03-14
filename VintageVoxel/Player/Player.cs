@@ -22,6 +22,11 @@ public class Player
     public float Stamina { get; set; } = DefaultMaxStamina;
     public float MaxStamina { get; set; } = DefaultMaxStamina;
 
+    // ── Game mode ─────────────────────────────────────────────────────────────
+
+    /// <summary>True when the player is in creative mode (fly, infinite items, creative inventory).</summary>
+    public bool IsCreativeMode { get; set; } = true;
+
     // ── World position ────────────────────────────────────────────────────────
 
     /// <summary>The bed / initial spawn position used on death.</summary>

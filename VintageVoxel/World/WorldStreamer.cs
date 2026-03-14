@@ -32,6 +32,16 @@ public sealed class WorldStreamer
     // Neighbor meshes deferred to subsequent frames.
     private readonly List<Vector3i> _pendingMeshRebuild = new();
 
+    /// <summary>Number of chunks still waiting to be loaded and lit.</summary>
+    public int PendingLoadCount => _pendingLoad.Count;
+
+    /// <summary>Number of chunks still waiting for mesh rebuilds.</summary>
+    public int PendingMeshCount => _pendingMeshRebuild.Count;
+
+    /// <summary>True while any chunk loading, lighting, or meshing work remains.</summary>
+    public bool HasPendingWork =>
+        _pendingLoad.Count > 0 || _pendingMeshRebuild.Count > 0 || LightEngine.HasPendingStreamLight;
+
     public WorldStreamer(World world, WorldRenderer renderer, string savePath)
     {
         _world = world;

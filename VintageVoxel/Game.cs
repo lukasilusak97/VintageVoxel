@@ -147,6 +147,16 @@ public class Game : GameWindow
         _gameClient?.Tick();
         _lanDiscovery.Poll();
 
+        // During loading, keep streaming chunks but skip physics and input.
+        // Transition to Playing once the world streamer has no pending work.
+        if (_gameState == GameState.Loading)
+        {
+            _worldStreamer?.Update(_camera.Position);
+            if (_worldStreamer != null && !_worldStreamer.HasPendingWork)
+                TransitionToPlaying();
+            return;
+        }
+
         if (_gameState != GameState.Playing)
             return;
 
@@ -238,7 +248,7 @@ public class Game : GameWindow
         Profiler.End("GL Clear");
 
         _worldRenderer?.Render(_camera, _entityItems, _debugState,
-                               _gameState == GameState.Playing,
+                               _gameState == GameState.Playing || _gameState == GameState.Loading,
                                FramebufferSize.X, FramebufferSize.Y,
                                (float)args.Time);
 
@@ -266,7 +276,7 @@ public class Game : GameWindow
         if (_gameState == GameState.Playing)
         {
             _inventoryWindow.Draw(_player.Inventory);
-            if (_inventoryWindow.IsOpen)
+            if (_inventoryWindow.IsOpen && _player.IsCreativeMode)
                 _creativeWindow.Draw(_inventoryWindow);
         }
 
@@ -281,7 +291,7 @@ public class Game : GameWindow
                 frameTimeMs: frameTimeMs,
                 playerPos: _camera.Position,
                 chunksLoaded: _worldRenderer.ChunkCount,
-                creativeMode: _camera.CreativeMode,
+                creativeMode: _player.IsCreativeMode,
                 heldItem: _player.Inventory.HeldStack,
                 hotbarSlot: _player.Inventory.SelectedSlot,
                 debugState: _debugState,
@@ -290,6 +300,8 @@ public class Game : GameWindow
 
         if (_gameState == GameState.MainMenu)
             DrawMainMenu();
+        else if (_gameState == GameState.Loading)
+            DrawLoadingScreen();
         else if (_gameState == GameState.Paused)
             DrawPauseMenu();
 
@@ -319,7 +331,7 @@ public class Game : GameWindow
                 _worldRenderer.RenderInventoryItems3D(
                     _inventoryWindow.SlotRenderTargets, ds.X, ds.Y,
                     FramebufferSize.X, FramebufferSize.Y);
-            if (_inventoryWindow.IsOpen && _creativeWindow.SlotRenderTargets.Count > 0)
+            if (_inventoryWindow.IsOpen && _player.IsCreativeMode && _creativeWindow.SlotRenderTargets.Count > 0)
                 _worldRenderer.RenderInventoryItems3D(
                     _creativeWindow.SlotRenderTargets, ds.X, ds.Y,
                     FramebufferSize.X, FramebufferSize.Y);
@@ -396,7 +408,17 @@ public class Game : GameWindow
             CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
         }
 
-        if (e.Key == Keys.F && _gameState == GameState.Playing)
+        if (e.Key == Keys.F4 && _gameState == GameState.Playing)
+        {
+            _player.IsCreativeMode = !_player.IsCreativeMode;
+            if (!_player.IsCreativeMode && _camera.CreativeMode)
+            {
+                _camera.CreativeMode = false;
+                _camera.Velocity = Vector3.Zero;
+            }
+        }
+
+        if (e.Key == Keys.F && _gameState == GameState.Playing && _player.IsCreativeMode)
         {
             _camera.CreativeMode = !_camera.CreativeMode;
             _camera.Velocity = Vector3.Zero;
@@ -508,6 +530,79 @@ public class Game : GameWindow
         _gameState = GameState.Playing;
         _firstMove = true;
         CursorState = _debugVisible ? CursorState.Normal : CursorState.Grabbed;
+    }
+
+    private void TransitionToLoading()
+    {
+        _gameState = GameState.Loading;
+        CursorState = CursorState.Normal;
+        _firstMove = true;
+    }
+
+    private void DrawLoadingScreen()
+    {
+        var ds = ImGui.GetIO().DisplaySize;
+
+        // Semi-transparent dark overlay.
+        var dl = ImGui.GetForegroundDrawList();
+        dl.AddRectFilled(
+            System.Numerics.Vector2.Zero,
+            new System.Numerics.Vector2(ds.X, ds.Y),
+            0xCC000000);
+
+        // Title text.
+        string title = "Loading World...";
+        var titleSize = ImGui.CalcTextSize(title);
+        float titleX = (ds.X - titleSize.X) * 0.5f;
+        float titleY = ds.Y * 0.4f;
+        dl.AddText(new System.Numerics.Vector2(titleX, titleY), 0xFFFFFFFF, title);
+
+        // Progress info.
+        int pendingLoad = _worldStreamer?.PendingLoadCount ?? 0;
+        int pendingMesh = _worldStreamer?.PendingMeshCount ?? 0;
+        int totalPending = pendingLoad + pendingMesh;
+        string status = totalPending > 0
+            ? $"Chunks remaining: {totalPending}"
+            : "Finishing up...";
+        var statusSize = ImGui.CalcTextSize(status);
+        float statusX = (ds.X - statusSize.X) * 0.5f;
+        float statusY = titleY + titleSize.Y + 16f;
+        dl.AddText(new System.Numerics.Vector2(statusX, statusY), 0xFFCCCCCC, status);
+
+        // Simple progress bar.
+        float barW = 300f;
+        float barH = 20f;
+        float barX = (ds.X - barW) * 0.5f;
+        float barY = statusY + statusSize.Y + 16f;
+
+        // Estimate total expected chunks from render distance.
+        int side = 2 * World.RenderDistance + 1;
+        int expectedTotal = side * side * World.MaxChunkY;
+        int loaded = _world?.Chunks.Count ?? 0;
+        float progress = expectedTotal > 0 ? Math.Clamp(loaded / (float)expectedTotal, 0f, 1f) : 0f;
+
+        // Bar background.
+        dl.AddRectFilled(
+            new System.Numerics.Vector2(barX, barY),
+            new System.Numerics.Vector2(barX + barW, barY + barH),
+            0xFF333333, 0f);
+        // Bar fill.
+        dl.AddRectFilled(
+            new System.Numerics.Vector2(barX, barY),
+            new System.Numerics.Vector2(barX + barW * progress, barY + barH),
+            0xFFC8C584, 0f);
+        // Bar border.
+        dl.AddRect(
+            new System.Numerics.Vector2(barX, barY),
+            new System.Numerics.Vector2(barX + barW, barY + barH),
+            0xFFAAAAAA, 0f);
+
+        // Percentage label centered on the bar.
+        string pctLabel = $"{(int)(progress * 100)}%";
+        var pctSize = ImGui.CalcTextSize(pctLabel);
+        float pctX = barX + (barW - pctSize.X) * 0.5f;
+        float pctY = barY + (barH - pctSize.Y) * 0.5f;
+        dl.AddText(new System.Numerics.Vector2(pctX, pctY), 0xFFFFFFFF, pctLabel);
     }
 
     /// <summary>
@@ -623,9 +718,10 @@ public class Game : GameWindow
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                               _worldRenderer, _entityItems, _vehicles, _savePath);
         _interaction.OnEntitySpawn = SpawnEntity;
+        _interaction.IsCreativeMode = () => _player.IsCreativeMode;
         _interaction.NetworkClient = null; // single-player: no networking
         _lastSaveStatus = null;
-        TransitionToPlaying();
+        TransitionToLoading();
     }
 
     private void OpenInventory()
@@ -692,64 +788,67 @@ public class Game : GameWindow
 
         _hotbarRenderTargets.Clear();
 
-        // ── HP & Stamina bars ─────────────────────────────────────────────────
-        const float BarH = 8f;
-        const float BarGap = 6f;  // gap between the two bars
-        float barY = y0 - BarH - 8f;
-        float halfW = (totalW - BarGap) * 0.5f;
+        // ── HP & Stamina bars (survival only) ────────────────────────────────
+        if (!player.IsCreativeMode)
+        {
+            const float BarH = 8f;
+            const float BarGap = 6f;  // gap between the two bars
+            float barY = y0 - BarH - 8f;
+            float halfW = (totalW - BarGap) * 0.5f;
 
-        // HP — left half, red
-        float hpFrac = MathF.Max(0f, MathF.Min(1f, player.Hp / player.MaxHp));
-        // background
-        dl.AddRectFilled(
-            new System.Numerics.Vector2(x0, barY),
-            new System.Numerics.Vector2(x0 + halfW, barY + BarH),
-            0x99000000, 2f);
-        // fill
-        if (hpFrac > 0f)
+            // HP — left half, red
+            float hpFrac = MathF.Max(0f, MathF.Min(1f, player.Hp / player.MaxHp));
+            // background
             dl.AddRectFilled(
                 new System.Numerics.Vector2(x0, barY),
-                new System.Numerics.Vector2(x0 + halfW * hpFrac, barY + BarH),
-                0xCC2255EE, 2f);  // AABBGGRR → red
-        // border
-        dl.AddRect(
-            new System.Numerics.Vector2(x0, barY),
-            new System.Numerics.Vector2(x0 + halfW, barY + BarH),
-            0xCCFFFFFF, 2f);
-        // label
-        string hpLabel = $"♥ {(int)player.Hp}/{(int)player.MaxHp}";
-        var hpTs = ImGui.CalcTextSize(hpLabel);
-        float hpTx = x0 + (halfW - hpTs.X) * 0.5f;
-        float hpTy = barY + (BarH - hpTs.Y) * 0.5f;
-        dl.AddText(new System.Numerics.Vector2(hpTx + 1, hpTy + 1), 0xAA000000, hpLabel);
-        dl.AddText(new System.Numerics.Vector2(hpTx, hpTy), 0xFFFFFFFF, hpLabel);
+                new System.Numerics.Vector2(x0 + halfW, barY + BarH),
+                0x99000000, 2f);
+            // fill
+            if (hpFrac > 0f)
+                dl.AddRectFilled(
+                    new System.Numerics.Vector2(x0, barY),
+                    new System.Numerics.Vector2(x0 + halfW * hpFrac, barY + BarH),
+                    0xCC2255EE, 2f);  // AABBGGRR → red
+            // border
+            dl.AddRect(
+                new System.Numerics.Vector2(x0, barY),
+                new System.Numerics.Vector2(x0 + halfW, barY + BarH),
+                0xCCFFFFFF, 2f);
+            // label
+            string hpLabel = $"♥ {(int)player.Hp}/{(int)player.MaxHp}";
+            var hpTs = ImGui.CalcTextSize(hpLabel);
+            float hpTx = x0 + (halfW - hpTs.X) * 0.5f;
+            float hpTy = barY + (BarH - hpTs.Y) * 0.5f;
+            dl.AddText(new System.Numerics.Vector2(hpTx + 1, hpTy + 1), 0xAA000000, hpLabel);
+            dl.AddText(new System.Numerics.Vector2(hpTx, hpTy), 0xFFFFFFFF, hpLabel);
 
-        // Stamina — right half, green-yellow
-        float stFrac = MathF.Max(0f, MathF.Min(1f, player.Stamina / player.MaxStamina));
-        float stX0 = x0 + halfW + BarGap;
-        // background
-        dl.AddRectFilled(
-            new System.Numerics.Vector2(stX0, barY),
-            new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
-            0x99000000, 2f);
-        // fill
-        if (stFrac > 0f)
+            // Stamina — right half, green-yellow
+            float stFrac = MathF.Max(0f, MathF.Min(1f, player.Stamina / player.MaxStamina));
+            float stX0 = x0 + halfW + BarGap;
+            // background
             dl.AddRectFilled(
                 new System.Numerics.Vector2(stX0, barY),
-                new System.Numerics.Vector2(stX0 + halfW * stFrac, barY + BarH),
-                0xCC00CC44, 2f);  // AABBGGRR → green
-        // border
-        dl.AddRect(
-            new System.Numerics.Vector2(stX0, barY),
-            new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
-            0xCCFFFFFF, 2f);
-        // label
-        string stLabel = $"⚡ {(int)player.Stamina}/{(int)player.MaxStamina}";
-        var stTs = ImGui.CalcTextSize(stLabel);
-        float stTx = stX0 + (halfW - stTs.X) * 0.5f;
-        float stTy = barY + (BarH - stTs.Y) * 0.5f;
-        dl.AddText(new System.Numerics.Vector2(stTx + 1, stTy + 1), 0xAA000000, stLabel);
-        dl.AddText(new System.Numerics.Vector2(stTx, stTy), 0xFFFFFFFF, stLabel);
+                new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
+                0x99000000, 2f);
+            // fill
+            if (stFrac > 0f)
+                dl.AddRectFilled(
+                    new System.Numerics.Vector2(stX0, barY),
+                    new System.Numerics.Vector2(stX0 + halfW * stFrac, barY + BarH),
+                    0xCC00CC44, 2f);  // AABBGGRR → green
+            // border
+            dl.AddRect(
+                new System.Numerics.Vector2(stX0, barY),
+                new System.Numerics.Vector2(stX0 + halfW, barY + BarH),
+                0xCCFFFFFF, 2f);
+            // label
+            string stLabel = $"⚡ {(int)player.Stamina}/{(int)player.MaxStamina}";
+            var stTs = ImGui.CalcTextSize(stLabel);
+            float stTx = stX0 + (halfW - stTs.X) * 0.5f;
+            float stTy = barY + (BarH - stTs.Y) * 0.5f;
+            dl.AddText(new System.Numerics.Vector2(stTx + 1, stTy + 1), 0xAA000000, stLabel);
+            dl.AddText(new System.Numerics.Vector2(stTx, stTy), 0xFFFFFFFF, stLabel);
+        }
 
         for (int i = 0; i < count; i++)
         {
@@ -824,7 +923,7 @@ public class Game : GameWindow
     {
         BeginCenteredWindow("##mainmenu");
 
-        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "VintageVoxel");
+        ImGui.TextColored(new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.0f), "VoltCraft");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -864,13 +963,22 @@ public class Game : GameWindow
             Close();
 
         ImGui.End();
+
+        // Version label in the bottom-right corner.
+        var ds = ImGui.GetIO().DisplaySize;
+        string version = "v0.0.1";
+        var vSize = ImGui.CalcTextSize(version);
+        var dl = ImGui.GetForegroundDrawList();
+        dl.AddText(
+            new System.Numerics.Vector2(ds.X - vSize.X - 8f, ds.Y - vSize.Y - 6f),
+            0xAAFFFFFF, version);
     }
 
     private void DrawNewWorldPage()
     {
         BeginCenteredWindow("##newworld");
 
-        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Create New World");
+        ImGui.TextColored(new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.0f), "Create New World");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -917,7 +1025,7 @@ public class Game : GameWindow
     {
         BeginCenteredWindow("##loadworld");
 
-        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Load World");
+        ImGui.TextColored(new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.0f), "Load World");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -1003,7 +1111,7 @@ public class Game : GameWindow
     {
         BeginCenteredWindow("##multiplayer");
 
-        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.9f, 1.0f, 1.0f), "Multiplayer");
+        ImGui.TextColored(new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.0f), "Multiplayer");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -1260,9 +1368,10 @@ public class Game : GameWindow
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
                                                 _worldRenderer, _entityItems, _vehicles, _savePath);
         _interaction.OnEntitySpawn = SpawnEntity;
+        _interaction.IsCreativeMode = () => _player.IsCreativeMode;
         _interaction.NetworkClient = _gameClient;
         _lastSaveStatus = null;
-        TransitionToPlaying();
+        TransitionToLoading();
     }
 
     /// <summary>
@@ -1283,7 +1392,7 @@ public class Game : GameWindow
             ImGuiWindowFlags.AlwaysAutoResize |
             ImGuiWindowFlags.NoSavedSettings);
 
-        ImGui.TextColored(new System.Numerics.Vector4(1.0f, 0.85f, 0.3f, 1.0f), "— Paused —");
+        ImGui.TextColored(new System.Numerics.Vector4(0.518f, 0.773f, 0.784f, 1.0f), "— Paused —");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();

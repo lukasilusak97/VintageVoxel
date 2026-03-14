@@ -98,7 +98,7 @@ public sealed class InventoryWindow
         ImGui.Begin("Inventory##vv_inv", Flags);
 
         // ── Title ─────────────────────────────────────────────────────────────
-        ImGui.TextColored(new Vector4(0.40f, 0.90f, 1.00f, 1f), "Inventory");
+        ImGui.TextColored(new Vector4(0.518f, 0.773f, 0.784f, 1f), "Inventory");
         ImGui.Separator();
         ImGui.Spacing();
 

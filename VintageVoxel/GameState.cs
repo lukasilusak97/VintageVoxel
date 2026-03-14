@@ -14,6 +14,10 @@ public enum GameState
     /// <summary>Pre-game main menu. Physics and streaming are paused; cursor is free.</summary>
     MainMenu,
 
+    /// <summary>World is being loaded. Streaming runs but physics and player input are disabled.
+    /// A loading overlay is drawn until all initial chunks are ready.</summary>
+    Loading,
+
     /// <summary>Active gameplay. Physics and streaming run; cursor is captured.</summary>
     Playing,
 
