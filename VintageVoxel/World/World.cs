@@ -77,6 +77,9 @@ public class World
     // Chunk streaming
     // -------------------------------------------------------------------------
 
+    /// <summary>Max chunks to generate (terrain noise) per frame to avoid spikes.</summary>
+    private const int MaxChunkGenPerFrame = 8;
+
     /// <summary>
     /// Loads chunks within <see cref="RenderDistance"/> of <paramref name="playerPos"/>
     /// and unloads those beyond <see cref="UnloadDistance"/>.
@@ -96,15 +99,18 @@ public class World
         Vector2i center = WorldToChunk(playerPos);
 
         // Generate missing chunks within the render square, across all vertical layers.
-        for (int dz = -RenderDistance; dz <= RenderDistance; dz++)
-            for (int dx = -RenderDistance; dx <= RenderDistance; dx++)
-                for (int cy = 0; cy < MaxChunkY; cy++)
+        // Rate-limited to avoid frame spikes from noise-based terrain generation.
+        int generated = 0;
+        for (int dz = -RenderDistance; dz <= RenderDistance && generated < MaxChunkGenPerFrame; dz++)
+            for (int dx = -RenderDistance; dx <= RenderDistance && generated < MaxChunkGenPerFrame; dx++)
+                for (int cy = 0; cy < MaxChunkY && generated < MaxChunkGenPerFrame; cy++)
                 {
                     var key = new Vector3i(center.X + dx, cy, center.Y + dz);
                     if (!_chunks.ContainsKey(key))
                     {
                         _chunks[key] = new Chunk(key);
                         added.Add(key);
+                        generated++;
                     }
                 }
 

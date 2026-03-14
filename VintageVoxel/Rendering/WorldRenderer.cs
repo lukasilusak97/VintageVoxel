@@ -321,11 +321,18 @@ public sealed class WorldRenderer : IDisposable
         // "fully lit" for leaf faces that should be in canopy shadow.
         // Solid leaf-block silhouettes on the shadow map fix this completely.
         _shadowShader.SetInt("uAlphaTest", 0);
+        var lightFrustum = Frustum.FromViewProjection(_lightSpaceMatrix, Matrix4.Identity);
         foreach (var (key, gpu) in _chunkGpuData)
         {
             if (gpu.IndexCount == 0) continue;
-            var model = Matrix4.CreateTranslation(
-                key.X * Chunk.Size, key.Y * Chunk.Size, key.Z * Chunk.Size);
+            int wx = key.X * Chunk.Size;
+            int wy = key.Y * Chunk.Size;
+            int wz = key.Z * Chunk.Size;
+            if (!lightFrustum.ContainsAabb(
+                    new Vector3(wx, wy, wz),
+                    new Vector3(wx + Chunk.Size, wy + Chunk.Size, wz + Chunk.Size)))
+                continue;
+            var model = Matrix4.CreateTranslation(wx, wy, wz);
             _shadowShader.SetMatrix4("model", ref model);
             GL.BindVertexArray(gpu.Vao);
             GL.DrawElements(PrimitiveType.Triangles, gpu.IndexCount,
@@ -335,33 +342,6 @@ public sealed class WorldRenderer : IDisposable
         // --- Floating entity items (dropped picks, etc.) ---
         if (entityItems.Count > 0)
             _entityRenderer.Render(entityItems, _shadowShader, _atlas.Handle);
-
-        // --- Stationary placed models ---
-        // Each model may use its own texture; switch alpha-test on/off accordingly.
-        foreach (var (blockPos, entity) in _placedModels)
-        {
-            var item = entity.Item;
-            if (item.Mesh is null) continue;
-            ModelGpu mg = GetOrCreateModelGpu(item);
-
-            if (mg.TexHandle != 0)
-            {
-                GL.BindTexture(TextureTarget.Texture2D, mg.TexHandle);
-                _shadowShader.SetInt("uAlphaTest", 1);
-            }
-            else
-            {
-                GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
-                _shadowShader.SetInt("uAlphaTest", 0);
-            }
-
-            var model = Matrix4.CreateScale(1f / 16f) *
-                        Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
-            _shadowShader.SetMatrix4("model", ref model);
-            GL.BindVertexArray(mg.Mesh.Vao);
-            GL.DrawElements(PrimitiveType.Triangles, mg.Mesh.IndexCount,
-                            DrawElementsType.UnsignedInt, 0);
-        }
 
         // Restore atlas on unit 0 for subsequent passes.
         GL.BindTexture(TextureTarget.Texture2D, _atlas.Handle);
@@ -429,7 +409,7 @@ public sealed class WorldRenderer : IDisposable
             return (mg.Mesh.Vao, mg.Mesh.IndexCount, mg.TexHandle);
         });
         if (_placedModels.Count > 0)
-            RenderPlacedModels();
+            RenderPlacedModels(frustum);
         Profiler.End("Entity Render");
 
         // Transparent water pass — after all opaque geometry and entities.
@@ -506,12 +486,17 @@ public sealed class WorldRenderer : IDisposable
         GL.Disable(EnableCap.Blend);
     }
 
-    private void RenderPlacedModels()
+    private void RenderPlacedModels(Frustum frustum)
     {
         GL.Disable(EnableCap.CullFace);
 
         foreach (var (blockPos, entity) in _placedModels)
         {
+            // Frustum cull individual placed models (1-block AABB).
+            var min = new Vector3(blockPos.X, blockPos.Y, blockPos.Z);
+            var max = new Vector3(blockPos.X + 1f, blockPos.Y + 1f, blockPos.Z + 1f);
+            if (!frustum.ContainsAabb(min, max)) continue;
+
             var item = entity.Item;
             if (item.Mesh is null) continue;
 

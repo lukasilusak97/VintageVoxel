@@ -303,65 +303,55 @@ public static class ChunkMeshBuilder
 
         float dirScale = FaceSunScale[face];
 
-        float[] ao = new float[4];
-        float[] sunLight = new float[4];
-        float[] blkLight = new float[4];
+        // Use stack variables instead of heap-allocated arrays.
+        float ao0, ao1, ao2, ao3;
+        float sun0, sun1, sun2, sun3;
+        float blk0, blk1, blk2, blk3;
 
-        for (int v = 0; v < 4; v++)
-        {
-            int solidCount = 0;
-            for (int k = 0; k < 3; k++)
-            {
-                var (ox, oy, oz) = AoNeighbors[face, v, k];
-                if (IsSolid(bx + ox, by + oy, bz + oz, chunk, world))
-                    solidCount++;
-            }
-            ao[v] = solidCount switch { 0 => 1.0f, 1 => 0.8f, 2 => 0.6f, _ => 0.4f };
+        ComputeVertexLighting(bx, by, bz, face, 0, dirScale, chunk, world, out ao0, out sun0, out blk0);
+        ComputeVertexLighting(bx, by, bz, face, 1, dirScale, chunk, world, out ao1, out sun1, out blk1);
+        ComputeVertexLighting(bx, by, bz, face, 2, dirScale, chunk, world, out ao2, out sun2, out blk2);
+        ComputeVertexLighting(bx, by, bz, face, 3, dirScale, chunk, world, out ao3, out sun3, out blk3);
 
-            SampleSmoothLight(bx, by, bz, face, v, chunk, world, out float sv, out float bv);
-            sunLight[v] = sv * dirScale;
-            blkLight[v] = bv;
-        }
-
-        bool flip = (ao[0] + ao[2] < ao[1] + ao[3]);
+        bool flip = (ao0 + ao2 < ao1 + ao3);
 
         switch (face)
         {
             case 0: // Top (+Y)
-                AddV(verts, x0, y1, z0, u0, 0f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, 1f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, 1f, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x1, y1, z0, u1, 0f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x0, y1, z0, u0, 0f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z1, u0, 1f, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z1, u1, 1f, sun2, blk2, ao2);
+                AddV(verts, x1, y1, z0, u1, 0f, sun3, blk3, ao3);
                 break;
             case 1: // Bottom (-Y)
-                AddV(verts, x0, y0, z0, u0, 0f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x1, y0, z0, u1, 0f, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y0, z1, u1, 1f, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x0, y0, z1, u0, 1f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x0, y0, z0, u0, 0f, sun0, blk0, ao0);
+                AddV(verts, x1, y0, z0, u1, 0f, sun1, blk1, ao1);
+                AddV(verts, x1, y0, z1, u1, 1f, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z1, u0, 1f, sun3, blk3, ao3);
                 break;
             case 2: // North (-Z)
-                AddV(verts, x0, y0, z0, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x0, y1, z0, u0, vTop, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y1, z0, u1, vTop, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x1, y0, z0, u1, 1f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x0, y0, z0, u0, 1f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z0, u0, vTop, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z0, u1, vTop, sun2, blk2, ao2);
+                AddV(verts, x1, y0, z0, u1, 1f, sun3, blk3, ao3);
                 break;
             case 3: // South (+Z)
-                AddV(verts, x1, y0, z1, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x1, y1, z1, u0, vTop, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x0, y1, z1, u1, vTop, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x0, y0, z1, u1, 1f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x1, y0, z1, u0, 1f, sun0, blk0, ao0);
+                AddV(verts, x1, y1, z1, u0, vTop, sun1, blk1, ao1);
+                AddV(verts, x0, y1, z1, u1, vTop, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z1, u1, 1f, sun3, blk3, ao3);
                 break;
             case 4: // West (-X)
-                AddV(verts, x0, y0, z1, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x0, y1, z1, u0, vTop, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x0, y1, z0, u1, vTop, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x0, y0, z0, u1, 1f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x0, y0, z1, u0, 1f, sun0, blk0, ao0);
+                AddV(verts, x0, y1, z1, u0, vTop, sun1, blk1, ao1);
+                AddV(verts, x0, y1, z0, u1, vTop, sun2, blk2, ao2);
+                AddV(verts, x0, y0, z0, u1, 1f, sun3, blk3, ao3);
                 break;
             case 5: // East (+X)
-                AddV(verts, x1, y0, z0, u0, 1f, sunLight[0], blkLight[0], ao[0]);
-                AddV(verts, x1, y1, z0, u0, vTop, sunLight[1], blkLight[1], ao[1]);
-                AddV(verts, x1, y1, z1, u1, vTop, sunLight[2], blkLight[2], ao[2]);
-                AddV(verts, x1, y0, z1, u1, 1f, sunLight[3], blkLight[3], ao[3]);
+                AddV(verts, x1, y0, z0, u0, 1f, sun0, blk0, ao0);
+                AddV(verts, x1, y1, z0, u0, vTop, sun1, blk1, ao1);
+                AddV(verts, x1, y1, z1, u1, vTop, sun2, blk2, ao2);
+                AddV(verts, x1, y0, z1, u1, 1f, sun3, blk3, ao3);
                 break;
         }
 
@@ -382,6 +372,30 @@ public static class ChunkMeshBuilder
     // -----------------------------------------------------------------------
     // Smooth lighting helper
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Computes AO, sunlight and blocklight for a single vertex of a face in one pass,
+    /// avoiding per-vertex heap allocations.
+    /// </summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static void ComputeVertexLighting(
+        int bx, int by, int bz, int face, int vertex, float dirScale,
+        Chunk chunk, World? world,
+        out float ao, out float sun, out float blk)
+    {
+        int solidCount = 0;
+        for (int k = 0; k < 3; k++)
+        {
+            var (ox, oy, oz) = AoNeighbors[face, vertex, k];
+            if (IsSolid(bx + ox, by + oy, bz + oz, chunk, world))
+                solidCount++;
+        }
+        ao = solidCount switch { 0 => 1.0f, 1 => 0.8f, 2 => 0.6f, _ => 0.4f };
+
+        SampleSmoothLight(bx, by, bz, face, vertex, chunk, world, out float sv, out float bv);
+        sun = sv * dirScale;
+        blk = bv;
+    }
 
     /// <summary>
     /// Computes smooth sunLight and blockLight for a single vertex corner by
