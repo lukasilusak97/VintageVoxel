@@ -88,10 +88,9 @@ public sealed class EntityItemRenderer : IDisposable
                         currentTex = mTexHandle;
                     }
 
-                    // Translate origin from Minecraft 0-16 centre → scale to block space → tilt → spin → world position.
+                    // Centre the normalised model → tilt → spin → world position.
                     var model =
-                        Matrix4.CreateTranslation(-8f, -8f, -8f) *
-                        Matrix4.CreateScale(1f / 16f) *
+                        Matrix4.CreateTranslation(-0.5f, -0.5f, -0.5f) *
                         Matrix4.CreateRotationX(MathF.PI / 8f) *
                         Matrix4.CreateRotationY(entity.SpinAngle) *
                         Matrix4.CreateTranslation(entity.Position.X,

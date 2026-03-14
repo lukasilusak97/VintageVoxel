@@ -2,14 +2,15 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using VintageVoxel.Networking;
+using VintageVoxel.Physics;
 using VintageVoxel.Rendering;
 
 namespace VintageVoxel;
 
 /// <summary>
-/// Handles all player-world interactions: block breaking/placing and
-/// item dropping. Delegates the actual mesh rebuilds and placed-model tracking
-/// to <see cref="WorldRenderer"/>.
+/// Handles all player-world interactions: block breaking/placing, item dropping,
+/// vehicle body pickup, and wheel attachment.
+/// Delegates the actual mesh rebuilds and placed-model tracking to <see cref="WorldRenderer"/>.
 /// </summary>
 public sealed class InteractionHandler
 {
@@ -18,6 +19,7 @@ public sealed class InteractionHandler
     private readonly Inventory _inventory;
     private readonly WorldRenderer _renderer;
     private readonly List<EntityItem> _entityItems;
+    private readonly List<Vehicle> _vehicles;
     private readonly string _savePath;
 
     /// <summary>
@@ -36,13 +38,15 @@ public sealed class InteractionHandler
     public Action<int, Vector3>? OnEntitySpawn { get; set; }
 
     public InteractionHandler(World world, Camera camera, Inventory inventory,
-                              WorldRenderer renderer, List<EntityItem> entityItems, string savePath)
+                              WorldRenderer renderer, List<EntityItem> entityItems,
+                              List<Vehicle> vehicles, string savePath)
     {
         _world = world;
         _camera = camera;
         _inventory = inventory;
         _renderer = renderer;
         _entityItems = entityItems;
+        _vehicles = vehicles;
         _savePath = savePath;
     }
 
@@ -51,6 +55,9 @@ public sealed class InteractionHandler
     {
         if (e.Button == MouseButton.Left)
         {
+            // Try picking up a vehicle body first.
+            if (TryPickupVehicle()) return;
+
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
@@ -65,6 +72,9 @@ public sealed class InteractionHandler
         }
         else if (e.Button == MouseButton.Right)
         {
+            // Try attaching a wheel to a placed vehicle body first.
+            if (TryAttachWheel()) return;
+
             var hit = Raycaster.Cast(_camera.Position, _camera.Front, _world);
             if (hit.Hit)
             {
@@ -119,6 +129,11 @@ public sealed class InteractionHandler
 
         if (held.Item!.Type == ItemType.Entity)
         {
+            // Wheel items can only be attached to placed vehicle bodies, not placed standalone.
+            var def = EntityRegistry.Get(held.Item.EntityId);
+            if (def != null && string.Equals(def.Type, "vehicleWheel", StringComparison.OrdinalIgnoreCase))
+                return;
+
             var item = held.Item;
             _inventory.RemoveItem(item, 1);
             var spawnPos = new Vector3(wx + 0.5f, wy + 1.0f, wz + 0.5f);
@@ -156,5 +171,123 @@ public sealed class InteractionHandler
         var spawnPos = new Vector3(blockPos.X + 0.5f, blockPos.Y + 0.5f, blockPos.Z + 0.5f);
         var impulse = new Vector3(0f, 3f, 0f);
         _entityItems.Add(new EntityItem(item, 1, spawnPos, impulse));
+    }
+
+    // -------------------------------------------------------------------------
+    // Vehicle assembly helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>Radius within which the camera ray is considered "pointing at" a vehicle body.</summary>
+    private const float VehiclePickupRayRadius = 2.0f;
+
+    /// <summary>Radius within which the camera ray is considered "pointing at" a wheel slot.</summary>
+    private const float WheelSlotRayRadius = 1.0f;
+
+    /// <summary>
+    /// Left-click: if the camera ray is close to any placed vehicle body,
+    /// remove it and return all parts (body + attached wheels) to inventory.
+    /// </summary>
+    private bool TryPickupVehicle()
+    {
+        var origin = _camera.Position;
+        var dir = _camera.Front.Normalized();
+
+        for (int vi = _vehicles.Count - 1; vi >= 0; vi--)
+        {
+            var vehicle = _vehicles[vi];
+            if (vehicle.IsOccupied) continue;
+
+            var vehiclePos = vehicle.Position.ToOpenTK();
+            float playerDist = (origin - vehiclePos).Length;
+            if (playerDist > vehicle.InteractRadius) continue;
+
+            float rayDist = DistanceFromRay(origin, dir, vehiclePos);
+            if (rayDist > VehiclePickupRayRadius) continue;
+
+            // Return body item to inventory.
+            var bodyItem = ItemRegistry.GetByEntityId(vehicle.BodyEntityId);
+            if (bodyItem != null)
+                _inventory.AddItem(bodyItem, 1);
+
+            // Return each attached wheel to inventory.
+            for (int i = 0; i < vehicle.WheelSlotCount; i++)
+            {
+                if (!vehicle.IsWheelAttached(i)) continue;
+                int wheelEntityId = vehicle.GetWheelEntityId(i);
+                var wheelItem = ItemRegistry.GetByEntityId(wheelEntityId);
+                if (wheelItem != null)
+                    _inventory.AddItem(wheelItem, 1);
+            }
+
+            vehicle.Dispose();
+            _vehicles.RemoveAt(vi);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Right-click while holding a wheel entity item: find the closest
+    /// unoccupied wheel slot on a nearby vehicle body and attach the wheel.
+    /// </summary>
+    private bool TryAttachWheel()
+    {
+        ref var held = ref _inventory.HeldStack;
+        if (held.IsEmpty || held.Item!.Type != ItemType.Entity) return false;
+
+        var def = EntityRegistry.Get(held.Item.EntityId);
+        if (def == null || !string.Equals(def.Type, "vehicleWheel", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var wheelSetup = EntityRegistry.GetWheelSetup(held.Item.EntityId);
+        if (wheelSetup == null) return false;
+
+        var origin = _camera.Position;
+        var dir = _camera.Front.Normalized();
+
+        Vehicle? bestVehicle = null;
+        int bestSlot = -1;
+        float bestDist = float.MaxValue;
+
+        foreach (var vehicle in _vehicles)
+        {
+            float playerDist = (origin - vehicle.Position.ToOpenTK()).Length;
+            if (playerDist > vehicle.InteractRadius) continue;
+
+            var wheelOffsets = vehicle.GetWheelOffsetsWorld();
+            for (int i = 0; i < vehicle.WheelSlotCount; i++)
+            {
+                if (vehicle.IsWheelAttached(i)) continue;
+
+                var slotWorld = wheelOffsets[i].ToOpenTK();
+                float d = DistanceFromRay(origin, dir, slotWorld);
+                if (d < bestDist && d < WheelSlotRayRadius)
+                {
+                    bestDist = d;
+                    bestVehicle = vehicle;
+                    bestSlot = i;
+                }
+            }
+        }
+
+        if (bestVehicle == null || bestSlot < 0) return false;
+
+        bestVehicle.AttachWheel(bestSlot, held.Item.EntityId, wheelSetup);
+        _inventory.RemoveItem(held.Item, 1);
+        return true;
+    }
+
+    /// <summary>
+    /// Computes the perpendicular distance from a point to a ray,
+    /// returning float.MaxValue if the point is behind the ray origin.
+    /// </summary>
+    private static float DistanceFromRay(Vector3 rayOrigin, Vector3 rayDir, Vector3 point)
+    {
+        var toPoint = point - rayOrigin;
+        float t = Vector3.Dot(toPoint, rayDir);
+        if (t < 0f) return float.MaxValue; // behind camera
+        var closest = rayOrigin + rayDir * t;
+        return (point - closest).Length;
     }
 }

@@ -51,7 +51,7 @@ public readonly struct ChunkMesh
 /// SMOOTH LIGHTING:
 ///   For each vertex corner of a quad, light is averaged across the four voxels
 ///   that share that corner (face-adjacent + 3 AO neighbor positions), matching
-///   the smooth-lighting algorithm used in Minecraft Java Edition.
+///   the smooth-lighting algorithm common in voxel engines.
 ///
 /// DIRECTIONAL SHADING:
 ///   The sunLight value is multiplied by a per-face scalar (1.0 top, 0.5 bottom,

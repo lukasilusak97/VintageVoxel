@@ -1,0 +1,35 @@
+{
+	"editor": {
+		"backDropShape": "",
+		"collapsedPaths": "",
+		"allAngles": false,
+		"entityTextureMode": false,
+		"singleTexture": false,
+		"vsFormatConverted": false
+	},
+	"textureWidth": 128,
+	"textureHeight": 128,
+	"textureSizes": {
+		"buggie_body.png": [ 128, 128 ]
+	},
+	"textures": {
+		"buggie_body.png": ""
+	},
+	"elements": [
+		{
+			"name": "cube",
+			"from": [ -3, 0, -12 ],
+			"to": [ 19, 2, 30 ],
+			"rotationOrigin": [ 8, 0, 8 ],
+			"faces": {
+				"north": { "texture": "#buggie_body.png", "uv": [ 0, 44, 22, 46 ], "autoUv": false, "snapUv": false },
+				"east": { "texture": "#buggie_body.png", "uv": [ 0, 42, 42, 44 ], "autoUv": false, "snapUv": false },
+				"south": { "texture": "#buggie_body.png", "uv": [ 44, 0, 66, 2 ], "autoUv": false, "snapUv": false },
+				"west": { "texture": "#buggie_body.png", "uv": [ 42, 42, 84, 44 ], "autoUv": false, "snapUv": false },
+				"up": { "texture": "#buggie_body.png", "uv": [ 22, 42, 0, 0 ], "autoUv": false, "snapUv": false },
+				"down": { "texture": "#buggie_body.png", "uv": [ 44, 0, 22, 42 ], "rotation": 180, "autoUv": false, "snapUv": false }
+			}
+		}
+	],
+	"animations": [ ]
+}

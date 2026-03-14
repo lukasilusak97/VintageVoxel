@@ -42,20 +42,13 @@ public class Item
     public ItemType Type { get; }
 
     /// <summary>
-    /// Loaded voxel model for <see cref="ItemType.Model"/> items (legacy VoxelModel format).
+    /// Loaded model mesh for <see cref="ItemType.Model"/> items.
     /// <see langword="null"/> for <see cref="ItemType.Block"/> items.
-    /// </summary>
-    public VoxelModel? Model { get; }
-
-    /// <summary>
-    /// Loaded Minecraft-element mesh for <see cref="ItemType.Model"/> items.
-    /// <see langword="null"/> for <see cref="ItemType.Block"/> items or models
-    /// that could not be parsed as a Minecraft-format JSON.
     /// </summary>
     public ModelMesh? Mesh { get; }
 
     public Item(int id, string name, int maxStackSize, int blockId = 0,
-                ItemType type = ItemType.Block, VoxelModel? model = null,
+                ItemType type = ItemType.Block,
                 ModelMesh? mesh = null, int entityId = 0)
     {
         Id = id;
@@ -63,7 +56,6 @@ public class Item
         MaxStackSize = maxStackSize;
         BlockId = blockId;
         Type = type;
-        Model = model;
         Mesh = mesh;
         EntityId = entityId;
     }

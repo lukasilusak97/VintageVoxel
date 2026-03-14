@@ -44,6 +44,9 @@ public sealed class RaycastSuspension
     /// <summary>Per-wheel results from the last <see cref="Update"/> call.</summary>
     public readonly WheelState[] WheelStates;
 
+    /// <summary>Per-wheel active mask. Only active (attached) wheels produce suspension forces.</summary>
+    public readonly bool[] ActiveMask;
+
     /// <summary>Maximum downward probe distance from each wheel attachment (world units).</summary>
     public float SuspensionLength { get; set; } = 1.0f;
 
@@ -87,6 +90,7 @@ public sealed class RaycastSuspension
         }
 
         WheelStates = new WheelState[WheelOffsets.Length];
+        ActiveMask = new bool[WheelOffsets.Length];
     }
 
     /// <summary>
@@ -104,6 +108,12 @@ public sealed class RaycastSuspension
         for (int i = 0; i < WheelOffsets.Length; i++)
         {
             ref var state = ref WheelStates[i];
+
+            if (!ActiveMask[i])
+            {
+                state.OnGround = false;
+                continue;
+            }
 
             // Transform the local wheel offset to world space.
             var worldOffset = Vector3.Transform(WheelOffsets[i], pose.Orientation);
@@ -162,14 +172,21 @@ public sealed class RaycastSuspension
             }
         }
 
-        // Auto-righting torque: gently steer the chassis back to upright.
-        var bodyUp = Vector3.Transform(Vector3.UnitY, pose.Orientation);
-        var rightingAxis = Vector3.Cross(bodyUp, Vector3.UnitY);
-        float sinAngle = rightingAxis.Length();
-        if (sinAngle > 0.001f)
+        // Auto-righting torque: only apply when at least one wheel is active.
+        bool anyActive = false;
+        for (int i = 0; i < ActiveMask.Length; i++)
+            if (ActiveMask[i]) { anyActive = true; break; }
+
+        if (anyActive)
         {
-            rightingAxis /= sinAngle;
-            body.ApplyAngularImpulse(rightingAxis * (sinAngle * RightingTorque * dt));
+            var bodyUp = Vector3.Transform(Vector3.UnitY, pose.Orientation);
+            var rightingAxis = Vector3.Cross(bodyUp, Vector3.UnitY);
+            float sinAngle = rightingAxis.Length();
+            if (sinAngle > 0.001f)
+            {
+                rightingAxis /= sinAngle;
+                body.ApplyAngularImpulse(rightingAxis * (sinAngle * RightingTorque * dt));
+            }
         }
     }
 

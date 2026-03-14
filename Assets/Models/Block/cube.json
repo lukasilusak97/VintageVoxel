@@ -1,18 +1,19 @@
 {
-	"format_version": "1.21.11",
-	"credit": "Made with Blockbench",
+	"textureWidth": 64,
+	"textureHeight": 32,
+	"textures": { },
 	"elements": [
 		{
-			"from": [0, 0, 0],
-			"to": [16, 16, 16],
-			"color": 7,
+			"name": "cube",
+			"from": [ 0, 0, 0 ],
+			"to": [ 16, 16, 16 ],
 			"faces": {
-				"north": {"uv": [16, 16, 32, 32], "texture": "#missing"},
-				"east": {"uv": [0, 16, 16, 32], "texture": "#missing"},
-				"south": {"uv": [48, 16, 64, 32], "texture": "#missing"},
-				"west": {"uv": [32, 16, 48, 32], "texture": "#missing"},
-				"up": {"uv": [32, 16, 16, 0], "texture": "#missing"},
-				"down": {"uv": [48, 0, 32, 16], "texture": "#missing"}
+				"north": { "uv": [ 16, 16, 32, 32 ], "texture": "#missing" },
+				"east": { "uv": [ 0, 16, 16, 32 ], "texture": "#missing" },
+				"south": { "uv": [ 48, 16, 64, 32 ], "texture": "#missing" },
+				"west": { "uv": [ 32, 16, 48, 32 ], "texture": "#missing" },
+				"up": { "uv": [ 32, 16, 16, 0 ], "texture": "#missing" },
+				"down": { "uv": [ 48, 0, 32, 16 ], "texture": "#missing" }
 			}
 		}
 	]

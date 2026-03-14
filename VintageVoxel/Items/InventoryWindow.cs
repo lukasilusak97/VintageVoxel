@@ -6,7 +6,7 @@ namespace VintageVoxel;
 /// <summary>
 /// Renders the full inventory grid as a centred ImGui overlay window.
 ///
-/// Interaction model (Minecraft-style):
+/// Interaction model (drag-and-drop):
 ///   Left-click           – pick up entire stack / place held stack / swap with slot
 ///   Right-click          – pick up half stack / place one item
 ///   Shift + Left-click   – move entire stack to the first available slot on the

@@ -1,7 +1,7 @@
 namespace VintageVoxel;
 
 /// <summary>
-/// GPU-ready mesh data produced by <see cref="MinecraftModelLoader"/>.
+/// GPU-ready mesh data produced by <see cref="VSModelLoader"/>.
 /// </summary>
 /// <remarks>
 /// Vertex layout matches the world chunk shader stride (7 floats = 28 bytes):

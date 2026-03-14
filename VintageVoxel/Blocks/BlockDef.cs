@@ -9,7 +9,7 @@ public sealed record BlockDef(
     int Id,
     string Name,
 
-    /// <summary>Face texture names keyed by Minecraft direction: up/down/north/south/east/west.
+    /// <summary>Face texture names keyed by direction: up/down/north/south/east/west.
     /// The special key "all" is a shorthand that applies to every face.
     /// Null for model-only blocks (e.g. Torch) that have no cube faces.</summary>
     [property: JsonPropertyName("textures")]

@@ -1,34 +1,35 @@
 {
-  "format_version": "1.21.11",
-  "credit": "Created for VintageVoxel",
+  "textureWidth": 16,
+  "textureHeight": 16,
   "textures": {
     "0": "oak_planks",
-    "1": "stone",
-    "particle": "oak_planks"
+    "1": "stone"
   },
   "elements": [
     {
-      "from": [7, 0, 7],
-      "to": [9, 12, 9],
+      "name": "handle",
+      "from": [ 7, 0, 7 ],
+      "to": [ 9, 12, 9 ],
       "faces": {
-        "north": { "texture": "#0" },
-        "east": { "texture": "#0" },
-        "south": { "texture": "#0" },
-        "west": { "texture": "#0" },
-        "up": { "texture": "#0" },
-        "down": { "texture": "#0" }
+        "north": { "texture": "#0", "uv": [ 0, 0, 2, 12 ] },
+        "east": { "texture": "#0", "uv": [ 0, 0, 2, 12 ] },
+        "south": { "texture": "#0", "uv": [ 0, 0, 2, 12 ] },
+        "west": { "texture": "#0", "uv": [ 0, 0, 2, 12 ] },
+        "up": { "texture": "#0", "uv": [ 0, 0, 2, 2 ] },
+        "down": { "texture": "#0", "uv": [ 0, 0, 2, 2 ] }
       }
     },
     {
-      "from": [9, 9, 6],
-      "to": [14, 14, 10],
+      "name": "head",
+      "from": [ 9, 9, 6 ],
+      "to": [ 14, 14, 10 ],
       "faces": {
-        "north": { "texture": "#1" },
-        "east": { "texture": "#1" },
-        "south": { "texture": "#1" },
-        "west": { "texture": "#1" },
-        "up": { "texture": "#1" },
-        "down": { "texture": "#1" }
+        "north": { "texture": "#1", "uv": [ 0, 0, 5, 5 ] },
+        "east": { "texture": "#1", "uv": [ 0, 0, 4, 5 ] },
+        "south": { "texture": "#1", "uv": [ 0, 0, 5, 5 ] },
+        "west": { "texture": "#1", "uv": [ 0, 0, 4, 5 ] },
+        "up": { "texture": "#1", "uv": [ 0, 0, 5, 4 ] },
+        "down": { "texture": "#1", "uv": [ 0, 0, 5, 4 ] }
       }
     }
   ]

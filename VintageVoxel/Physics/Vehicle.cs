@@ -14,8 +14,9 @@ namespace VintageVoxel.Physics;
 /// <see cref="VehicleChassis"/>, <see cref="RaycastSuspension"/>,
 /// <see cref="VehicleController"/>, and the visual <see cref="VehicleRenderer"/>.
 ///
-/// Supports enter/leave via the E key with a proximity check.
-/// While the player is inside, the camera follows the vehicle and WASD drives it.
+/// Vehicles are built piece by piece: a body is placed first (no wheels),
+/// then wheels are attached to predefined slots. Physics only runs when at
+/// least one wheel is attached. The vehicle can be entered/left via E key.
 /// </summary>
 public sealed class Vehicle : IDisposable
 {
@@ -32,6 +33,13 @@ public sealed class Vehicle : IDisposable
     // Rendering
     private readonly VehicleRenderer _renderer;
     private readonly VehicleSetup? _setup;
+
+    // Assembly tracking
+    private readonly int[] _wheelEntityIds;
+    private readonly WheelSetup?[] _wheelSetups;
+
+    /// <summary>Entity ID of the body used to create this vehicle.</summary>
+    public int BodyEntityId { get; }
 
     /// <summary>True while the player is driving.</summary>
     public bool IsOccupied { get; private set; }
@@ -57,6 +65,37 @@ public sealed class Vehicle : IDisposable
     /// <summary>Suspension probe length for debug drawing.</summary>
     public float SuspensionLength => _suspension.SuspensionLength;
 
+    /// <summary>Number of wheel attachment slots defined by the body config.</summary>
+    public int WheelSlotCount => _suspension.WheelOffsets.Length;
+
+    /// <summary>Returns true if the given wheel slot has a wheel attached.</summary>
+    public bool IsWheelAttached(int slot) => _suspension.ActiveMask[slot];
+
+    /// <summary>Returns the entity ID of the wheel in the given slot, or 0 if empty.</summary>
+    public int GetWheelEntityId(int slot) => _wheelEntityIds[slot];
+
+    /// <summary>True when at least one wheel is attached.</summary>
+    public bool HasAnyWheels
+    {
+        get
+        {
+            for (int i = 0; i < _suspension.ActiveMask.Length; i++)
+                if (_suspension.ActiveMask[i]) return true;
+            return false;
+        }
+    }
+
+    /// <summary>Wheel model path from the first attached wheel, or null.</summary>
+    public string? WheelModelPath
+    {
+        get
+        {
+            for (int i = 0; i < _wheelSetups.Length; i++)
+                if (_wheelSetups[i] != null) return _wheelSetups[i]!.Model;
+            return null;
+        }
+    }
+
     /// <summary>Returns the world-space wheel attachment positions.</summary>
     public Vector3[] GetWheelOffsetsWorld()
     {
@@ -75,10 +114,12 @@ public sealed class Vehicle : IDisposable
         return copy;
     }
 
-    public Vehicle(World world, Vector3 spawnPosition, VehicleRenderer renderer, VehicleSetup? setup = null)
+    public Vehicle(World world, Vector3 spawnPosition, VehicleRenderer renderer,
+                   VehicleSetup? setup = null, int bodyEntityId = 0)
     {
         _renderer = renderer;
         _setup = setup;
+        BodyEntityId = bodyEntityId;
         var s = setup ?? new VehicleSetup();
 
         InteractRadius = s.InteractRadius;
@@ -91,34 +132,62 @@ public sealed class Vehicle : IDisposable
             new PoseIntegratorCallbacks(new Vector3(0, -9.81f, 0)),
             new SolveDescription(4, 1));
 
-        // Convert wheel positions from setup JSON to System.Numerics.Vector3 array.
-        Vector3[]? wheelOffsets = null;
-        if (s.Wheels is { Length: > 0 })
+        // Convert wheel slot positions from body config.
+        Vector3[]? slotOffsets = null;
+        if (s.WheelSlots is { Length: > 0 })
         {
-            wheelOffsets = new Vector3[s.Wheels.Length];
-            for (int i = 0; i < s.Wheels.Length; i++)
-                wheelOffsets[i] = new Vector3(s.Wheels[i].X, s.Wheels[i].Y, s.Wheels[i].Z);
+            slotOffsets = new Vector3[s.WheelSlots.Length];
+            for (int i = 0; i < s.WheelSlots.Length; i++)
+                slotOffsets[i] = new Vector3(s.WheelSlots[i].X, s.WheelSlots[i].Y, s.WheelSlots[i].Z);
         }
 
         _query = new VoxelPhysicsQuery(world);
         _chassis = new VehicleChassis(_simulation, spawnPosition,
             s.Chassis.Mass, s.Chassis.Width, s.Chassis.Height, s.Chassis.Length);
-        _suspension = new RaycastSuspension(_chassis, _query, wheelOffsets);
-        _suspension.SuspensionLength = s.Suspension.SuspensionLength;
-        _suspension.RestLength = s.Suspension.RestLength;
-        _suspension.SpringStiffness = s.Suspension.SpringStiffness;
-        _suspension.Damping = s.Suspension.Damping;
-        _suspension.RightingTorque = s.Suspension.RightingTorque;
-        _suspension.MinGroundClearance = s.Suspension.MinGroundClearance;
+        _suspension = new RaycastSuspension(_chassis, _query, slotOffsets);
+        // Suspension params are applied when wheels are attached.
         _controller = new VehicleController(_chassis, _suspension);
         _controller.DriveForce = s.Controller.DriveForce;
         _controller.BrakeForce = s.Controller.BrakeForce;
         _controller.SteerTorque = s.Controller.SteerTorque;
         _controller.LateralGrip = s.Controller.LateralGrip;
+
+        _wheelEntityIds = new int[_suspension.WheelOffsets.Length];
+        _wheelSetups = new WheelSetup[_suspension.WheelOffsets.Length];
+    }
+
+    /// <summary>Attaches a wheel to the given slot, activating it for physics.</summary>
+    public void AttachWheel(int slotIndex, int entityId, WheelSetup wheelSetup)
+    {
+        _wheelEntityIds[slotIndex] = entityId;
+        _wheelSetups[slotIndex] = wheelSetup;
+        _suspension.ActiveMask[slotIndex] = true;
+
+        // Apply suspension settings from the wheel config.
+        var susp = wheelSetup.Suspension;
+        _suspension.SuspensionLength = susp.SuspensionLength;
+        _suspension.RestLength = susp.RestLength;
+        _suspension.SpringStiffness = susp.SpringStiffness;
+        _suspension.Damping = susp.Damping;
+        _suspension.RightingTorque = susp.RightingTorque;
+        _suspension.MinGroundClearance = susp.MinGroundClearance;
+    }
+
+    /// <summary>Detaches a wheel from the given slot.  Returns the entity ID (0 if empty).</summary>
+    public int DetachWheel(int slotIndex)
+    {
+        if (!_suspension.ActiveMask[slotIndex]) return 0;
+
+        int entityId = _wheelEntityIds[slotIndex];
+        _wheelEntityIds[slotIndex] = 0;
+        _wheelSetups[slotIndex] = null;
+        _suspension.ActiveMask[slotIndex] = false;
+        return entityId;
     }
 
     /// <summary>
     /// Attempts to toggle enter/leave. Returns true if the state changed.
+    /// Cannot enter a vehicle with no wheels attached.
     /// </summary>
     /// <param name="playerPos">Player's current eye position (OpenTK).</param>
     public bool TryToggle(OpenTK.Mathematics.Vector3 playerPos)
@@ -128,6 +197,8 @@ public sealed class Vehicle : IDisposable
             IsOccupied = false;
             return true;
         }
+
+        if (!HasAnyWheels) return false;
 
         var vehiclePos = Position.ToOpenTK();
         float dist = (playerPos - vehiclePos).Length;
@@ -142,9 +213,13 @@ public sealed class Vehicle : IDisposable
 
     /// <summary>
     /// Runs one physics tick. Only processes vehicle controls when occupied.
+    /// Skips the simulation timestep entirely when no wheels are attached.
     /// </summary>
     public void Update(KeyboardState keyboard, float dt)
     {
+        // No physics until at least one wheel is attached.
+        if (!HasAnyWheels) return;
+
         // Clamp dt to prevent physics explosions from frame spikes.
         dt = MathF.Min(dt, 1f / 30f);
 
@@ -178,10 +253,12 @@ public sealed class Vehicle : IDisposable
         return (Position + left + new Vector3(0, 1.7f, 0)).ToOpenTK();
     }
 
-    /// <summary>Draws the vehicle model.</summary>
-    public void Render(Camera camera)
+    /// <summary>Draws the vehicle model, advancing any keyframe animations by <paramref name="deltaTime"/>.</summary>
+    public void Render(Camera camera, float deltaTime = 0f)
     {
-        _renderer.Render(Position, Orientation, camera, _setup, GetWheelOffsetsWorld());
+        _renderer.Render(Position, Orientation, camera, _setup,
+                         GetWheelOffsetsWorld(), WheelModelPath,
+                         _suspension.ActiveMask, deltaTime);
     }
 
     public void Dispose()

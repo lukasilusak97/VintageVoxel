@@ -537,8 +537,7 @@ public sealed class WorldRenderer : IDisposable
                 GL.BindTexture(TextureTarget.Texture2D, mg.TexHandle);
             }
 
-            var model = Matrix4.CreateScale(1f / 16f) *
-                        Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
+            var model = Matrix4.CreateTranslation(blockPos.X, blockPos.Y, blockPos.Z);
             _shader.SetMatrix4("model", ref model);
 
             GL.BindVertexArray(mg.Mesh.Vao);

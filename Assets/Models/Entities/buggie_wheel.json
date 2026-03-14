@@ -1,34 +1,155 @@
 {
-    "credit": "VintageVoxel buggie wheel",
-    "textures": {
-        "0": "buggie_wheel"
-    },
-    "elements": [
-        {
-            "name": "tire",
-            "from": [ -0.15, -0.2, -0.2 ],
-            "to": [ 0.15, 0.2, 0.2 ],
-            "faces": {
-                "north": { "uv": [ 0, 0, 5, 6 ], "texture": "#0" },
-                "south": { "uv": [ 0, 0, 5, 6 ], "texture": "#0" },
-                "east": { "uv": [ 0, 0, 6, 6 ], "texture": "#0" },
-                "west": { "uv": [ 0, 0, 6, 6 ], "texture": "#0" },
-                "up": { "uv": [ 0, 0, 5, 6 ], "texture": "#0" },
-                "down": { "uv": [ 0, 0, 5, 6 ], "texture": "#0" }
-            }
-        },
-        {
-            "name": "hub",
-            "from": [ -0.08, -0.1, -0.1 ],
-            "to": [ 0.08, 0.1, 0.1 ],
-            "faces": {
-                "north": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" },
-                "south": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" },
-                "east": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" },
-                "west": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" },
-                "up": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" },
-                "down": { "uv": [ 6, 0, 8, 3 ], "texture": "#0" }
-            }
-        }
-    ]
+	"editor": {
+		"backDropShape": "",
+		"collapsedPaths": "",
+		"allAngles": false,
+		"entityTextureMode": false,
+		"singleTexture": false,
+		"vsFormatConverted": false
+	},
+	"textureWidth": 32,
+	"textureHeight": 32,
+	"textureSizes": {
+		"bugie_wheel.png": [32, 32]
+	},
+	"textures": {
+		"bugie_wheel.png": ""
+	},
+	"elements": [
+		{
+			"name": "bone",
+			"from": [16, 7, 16],
+			"to": [16, 7, 16],
+			"rotationOrigin": [16, 7, 16],
+			"children": [
+				{
+					"name": "cube",
+					"from": [0, -6, 2],
+					"to": [1, 6, 4],
+					"rotationOrigin": [0, -6, 2],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -4, -6],
+					"to": [1, 4, -5],
+					"rotationOrigin": [0, -6, -6],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -5, 4],
+					"to": [1, 5, 5],
+					"rotationOrigin": [0, -6, 4],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -4, 5],
+					"to": [1, 4, 6],
+					"rotationOrigin": [0, -6, 5],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -2, 6],
+					"to": [1, 2, 7],
+					"rotationOrigin": [0, -6, 6],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -6, -4],
+					"to": [1, 6, -2],
+					"rotationOrigin": [0, -6, -4],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -5, -5],
+					"to": [1, 5, -4],
+					"rotationOrigin": [0, -6, -5],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -2, -7],
+					"to": [1, 2, -6],
+					"rotationOrigin": [0, -6, -7],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				},
+				{
+					"name": "cube",
+					"from": [0, -7, -2],
+					"to": [1, 7, 2],
+					"rotationOrigin": [0, -6, 0],
+					"faces": {
+						"north": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"east": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"south": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"west": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"up": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "autoUv": false, "snapUv": false},
+						"down": {"texture": "#bugie_wheel.png", "uv": [10, 0, 12, 12], "rotation": 180, "autoUv": false, "snapUv": false}
+					}
+				}
+			]
+		}
+	],
+	"animations": []
 }

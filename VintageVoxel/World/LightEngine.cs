@@ -5,7 +5,7 @@ using OpenTK.Mathematics;
 namespace VintageVoxel;
 
 /// <summary>
-/// Fast BFS-based voxel lighting engine with Minecraft-style photometric behavior.
+/// Fast BFS-based voxel lighting engine with sky-based photometric behavior.
 ///
 /// SUNLIGHT MODEL (sky channel)
 ///   Sky columns receive sunlight level 15 from the top of the world downward.

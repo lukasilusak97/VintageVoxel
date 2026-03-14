@@ -1,0 +1,11 @@
+{
+    "model": "Entities/BuggieWheel/buggie_wheel",
+    "suspension": {
+        "suspensionLength": 1.0,
+        "restLength": 0.6,
+        "springStiffness": 5000,
+        "damping": 1000,
+        "rightingTorque": 800,
+        "minGroundClearance": 0.3
+    }
+}

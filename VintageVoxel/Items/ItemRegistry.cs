@@ -32,7 +32,6 @@ public static class ItemRegistry
 
         foreach (var def in defs)
         {
-            VoxelModel? model = null;
             ModelMesh? mesh = null;
             ItemType itemType = ItemType.Block;
 
@@ -44,18 +43,24 @@ public static class ItemRegistry
             {
                 itemType = ItemType.Model;
                 string modelPath = Path.Combine(modelsDir, def.Model.ToLowerInvariant() + ".json");
-                // Try Minecraft/Blockbench element format first; fall back to VoxelModel format.
-                if (!MinecraftModelLoader.TryLoad(modelPath, out mesh))
-                    ModelLoader.TryLoad(modelPath, out model);
+                VSModelLoader.TryLoad(modelPath, out mesh);
             }
 
             _items[def.Id] = new Item(def.Id, def.Name, def.MaxStackSize, def.BlockId,
-                                      itemType, model, mesh, def.EntityId);
+                                      itemType, mesh, def.EntityId);
         }
     }
 
     /// <summary>Returns the item with the given ID, or <see langword="null"/> if not found.</summary>
     public static Item? Get(int id) => _items.TryGetValue(id, out var item) ? item : null;
+
+    /// <summary>Returns the first item whose <see cref="Item.EntityId"/> matches, or null.</summary>
+    public static Item? GetByEntityId(int entityId)
+    {
+        foreach (var item in _items.Values)
+            if (item.EntityId == entityId) return item;
+        return null;
+    }
 
     // -------------------------------------------------------------------------
     // Private DTO — matches the JSON schema in items.json

@@ -250,9 +250,10 @@ public class Game : GameWindow
         // Render vehicles.
         if (_gameState == GameState.Playing && _vehicles.Count > 0)
         {
+            float dt = (float)args.Time;
             foreach (var v in _vehicles)
             {
-                v.Render(_camera);
+                v.Render(_camera, dt);
                 if (_debugState.ShowVehicleDebug)
                     _vehicleDebugRenderer.Render(v, _camera);
             }
@@ -498,11 +499,11 @@ public class Game : GameWindow
         var def = EntityRegistry.Get(entityId);
         if (def == null || _world == null) return;
 
-        if (string.Equals(def.Type, "vehicle", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(def.Type, "vehicleBody", StringComparison.OrdinalIgnoreCase))
         {
             var setup = EntityRegistry.GetVehicleSetup(entityId);
             var spawnPos = new SNVector3(position.X, position.Y, position.Z);
-            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer, setup));
+            _vehicles.Add(new Vehicle(_world, spawnPos, _vehicleRenderer, setup, entityId));
         }
     }
 
@@ -628,7 +629,7 @@ public class Game : GameWindow
         _vehicles.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
-                                              _worldRenderer, _entityItems, _savePath);
+                                              _worldRenderer, _entityItems, _vehicles, _savePath);
         _interaction.OnEntitySpawn = SpawnEntity;
         _interaction.NetworkClient = null; // single-player: no networking
         _lastSaveStatus = null;
@@ -1265,7 +1266,7 @@ public class Game : GameWindow
         _vehicles.Clear();
         _worldStreamer = new WorldStreamer(_world, _worldRenderer, _savePath);
         _interaction = new InteractionHandler(_world, _camera, _player.Inventory,
-                                                _worldRenderer, _entityItems, _savePath);
+                                                _worldRenderer, _entityItems, _vehicles, _savePath);
         _interaction.OnEntitySpawn = SpawnEntity;
         _interaction.NetworkClient = _gameClient;
         _lastSaveStatus = null;

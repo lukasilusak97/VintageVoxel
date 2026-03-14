@@ -1,8 +1,14 @@
 [
     {
         "id": 1,
-        "name": "Buggie",
-        "type": "vehicle",
+        "name": "Buggie Body",
+        "type": "vehicleBody",
         "setup": "buggie"
+    },
+    {
+        "id": 2,
+        "name": "Buggie Wheel",
+        "type": "vehicleWheel",
+        "setup": "buggie_wheel"
     }
 ]
