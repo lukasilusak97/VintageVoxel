@@ -1,0 +1,78 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+// -----------------------------------------------------------------------
+// Seeds sunlight and block-light emitters into a 32^3 3D light texture.
+//
+// Sunlight rule:
+//   Non-full-block voxels in sky-open columns (no full block above in any
+//   chunk) receive sun level 15. The seed scans upward within this chunk
+//   to find the first full block; sky-open flags from the CPU handle the
+//   cross-chunk check.
+//
+// Block-light rule:
+//   Torch blocks (id == 4) are seeded at level 14.
+// -----------------------------------------------------------------------
+
+#define CS 32
+
+// -- Input SSBOs ----------------------------------------------------------
+
+// Block data: flat 32^3 array, one uint per voxel.
+//   bits [15:0]  = blockId
+//   bits [20:16] = layer (0-16)
+//   bit  [26]    = isTransparent
+layout(std430, binding = 0) readonly buffer BlockBuf { uint blockData[]; };
+
+// Per-column sky-open flags computed on CPU.
+// skyOpen[z] bit x == 1 means column (x,z) has no full block above this chunk.
+layout(std430, binding = 1) readonly buffer SkyOpenBuf { uint skyOpen[32]; };
+
+// -- Output image ---------------------------------------------------------
+
+// R = sunlight / 15,  G = blocklight / 15,  B = unused,  A = opacity (0 or 1)
+layout(rgba8, binding = 0) writeonly uniform image3D uLightOut;
+
+// -- Helpers --------------------------------------------------------------
+
+int blkIdx(int x, int y, int z) { return x + CS * (y + CS * z); }
+
+// -- Main -----------------------------------------------------------------
+
+void main()
+{
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(p, ivec3(CS)))) return;
+
+    uint bd    = blockData[blkIdx(p.x, p.y, p.z)];
+    uint id    = bd & 0xFFFFu;
+    uint layer = (bd >> 16) & 0x1Fu;
+    bool trans = (bd & (1u << 26)) != 0u;
+
+    float opacity = trans ? 0.0 : 1.0;
+    float sun = 0.0;
+    float blk = 0.0;
+
+    // -- Sunlight seeding -------------------------------------------------
+    // Seed all non-full voxels in a sky-open column, scanning upward to
+    // find the first full block within this chunk.
+    if (layer < 16u)
+    {
+        bool colOpen = (skyOpen[p.z] & (1u << uint(p.x))) != 0u;
+        if (colOpen)
+        {
+            bool blocked = false;
+            for (int y = p.y + 1; y < CS; y++)
+            {
+                uint above = blockData[blkIdx(p.x, y, p.z)];
+                if (((above >> 16) & 0x1Fu) >= 16u) { blocked = true; break; }
+            }
+            if (!blocked) sun = 15.0;
+        }
+    }
+
+    // -- Block-light seeding ----------------------------------------------
+    if (id == 4u) blk = 14.0;   // Torch
+
+    imageStore(uLightOut, p, vec4(sun / 15.0, blk / 15.0, 0.0, opacity));
+}

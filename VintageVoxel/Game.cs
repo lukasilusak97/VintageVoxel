@@ -644,7 +644,7 @@ public class Game : GameWindow
         _world = new World();
         _camera.Position = new Vector3(16f, 35f, 16f);
 
-        _world.Update(_camera.Position, out var initial, out _);
+        _world.Update(_camera.Position, out var initial, out _, out _);
         foreach (var key in initial)
         {
             if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))

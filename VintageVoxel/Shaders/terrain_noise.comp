@@ -1,0 +1,209 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// -----------------------------------------------------------------------
+// GPU terrain noise -- ports NoiseGenerator + Chunk.ComputeSurfaceHeight
+// and Chunk.ComputeBiome so that heightmap + biome map are computed
+// entirely on the GPU (one thread per column, 32x32 dispatch).
+// -----------------------------------------------------------------------
+
+#define CS 32
+
+// -- Permutation table (512 ints, uploaded once) --------------------------
+layout(std430, binding = 0) readonly buffer PermTable { int perm[512]; };
+
+// -- Output buffers -------------------------------------------------------
+layout(std430, binding = 1) writeonly buffer HeightMap { float heights[1024]; };
+layout(std430, binding = 2) writeonly buffer BiomeMap  { int   biomes[1024];  };
+
+// -- Uniforms -------------------------------------------------------------
+uniform ivec2 uChunkXZ; // chunk position in chunk coords
+
+// -------------------------------------------------------------------------
+// Perlin helpers (direct port of NoiseGenerator)
+// -------------------------------------------------------------------------
+
+// Ken Perlin fade: 6t^5 - 15t^4 + 10t^3
+float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+
+float grad(int hash, float x, float y)
+{
+    return (((hash & 1) == 0) ? x : -x)
+         + (((hash & 2) == 0) ? y : -y);
+}
+
+float perlinSample2D(float x, float y)
+{
+    int xi = int(floor(x)) & 255;
+    int yi = int(floor(y)) & 255;
+
+    float xf = x - floor(x);
+    float yf = y - floor(y);
+
+    float u = fade(xf);
+    float v = fade(yf);
+
+    int aa = perm[perm[xi]     + yi];
+    int ab = perm[perm[xi]     + yi + 1];
+    int ba = perm[perm[xi + 1] + yi];
+    int bb = perm[perm[xi + 1] + yi + 1];
+
+    float x1 = mix(grad(aa, xf,        yf),        grad(ba, xf - 1.0, yf),        u);
+    float x2 = mix(grad(ab, xf,        yf - 1.0),  grad(bb, xf - 1.0, yf - 1.0),  u);
+    return mix(x1, x2, v);
+}
+
+// Fractional Brownian Motion -- returns [0, 1].
+float perlinOctave(float x, float y, int octaves, float lac, float pers)
+{
+    float value = 0.0;
+    float amplitude = 1.0;
+    float frequency = 1.0;
+    float maxValue  = 0.0;
+
+    for (int i = 0; i < octaves; i++)
+    {
+        value    += perlinSample2D(x * frequency, y * frequency) * amplitude;
+        maxValue += amplitude;
+        amplitude *= pers;
+        frequency *= lac;
+    }
+    return (value / maxValue + 1.0) * 0.5;
+}
+
+// -------------------------------------------------------------------------
+// Terrain height (port of Chunk.ComputeSurfaceHeight)
+// -------------------------------------------------------------------------
+
+const int MaxWorldHeight = 256; // World.MaxChunkY(8) * Chunk.Size(32)
+
+float computeSurfaceHeight(float wx, float wz)
+{
+    // Continentalness
+    float continentalness = perlinOctave(wx * 0.0008 + 3000.0, wz * 0.0008 + 3000.0, 4, 2.0, 0.5);
+
+    float landFactor;
+    if (continentalness < 0.33)
+        landFactor = 0.0;
+    else if (continentalness < 0.43)
+        landFactor = (continentalness - 0.33) * 10.0;
+    else
+        landFactor = 1.0;
+
+    // Hermite smoothstep
+    landFactor = landFactor * landFactor * (3.0 - 2.0 * landFactor);
+
+    // Base continent shape
+    float continent = perlinOctave(wx * 0.010, wz * 0.010, 6, 2.0, 0.5);
+
+    // Detail hills
+    float detail = perlinOctave(wx * 0.035, wz * 0.035, 4, 2.0, 0.5);
+
+    // Erosion
+    float erosion = perlinOctave(wx * 0.0006 + 1000.0, wz * 0.0006 + 1000.0, 3, 2.0, 0.5);
+
+    // Ocean floor
+    float oceanH = 28.0 + continent * 20.0;
+
+    // Land base
+    float landH = 68.0 + continent * 24.0;
+
+    // Blend ocean / land
+    float h = oceanH + (landH - oceanH) * landFactor;
+
+    // Detail bumps
+    h += (detail - 0.5) * 8.0 * (0.3 + 0.7 * landFactor);
+
+    // Mountain ridges -- only on land
+    if (landFactor > 0.5 && erosion > 0.45)
+    {
+        float strength = (erosion - 0.45) / 0.55;
+        strength *= strength;
+        float ridge = perlinOctave(wx * 0.02, wz * 0.02, 5, 2.0, 0.5);
+        float ridged = 1.0 - abs(ridge * 2.0 - 1.0);
+        ridged *= ridged;
+        h += ridged * strength * 120.0 * landFactor;
+    }
+
+    // Valleys
+    if (landFactor > 0.5 && erosion < 0.30)
+    {
+        float valleyStr = (0.30 - erosion) / 0.30;
+        h = max(h * (1.0 - valleyStr * 0.25), 8.0);
+    }
+
+    // Inland lakes
+    if (landFactor > 0.85)
+    {
+        float lakeNoise = perlinOctave(wx * 0.005 + 7000.0, wz * 0.005 + 7000.0, 3, 2.0, 0.5);
+        if (lakeNoise < 0.25)
+        {
+            float lakeDepth = (0.25 - lakeNoise) / 0.25;
+            lakeDepth *= lakeDepth;
+            h -= lakeDepth * 24.0;
+        }
+    }
+
+    return clamp(h, 4.0, float(MaxWorldHeight) - 4.0);
+}
+
+// -------------------------------------------------------------------------
+// Biome (port of Chunk.ComputeBiome)
+// -------------------------------------------------------------------------
+
+const int BiomePlains      = 0;
+const int BiomeForest      = 1;
+const int BiomeDesert      = 2;
+const int BiomeMountains   = 3;
+const int BiomeSnowy       = 4;
+const int BiomeTaiga       = 5;
+const int BiomeDarkForest  = 6;
+const int BiomeBirchForest = 7;
+const int BiomeSavanna     = 8;
+const int BiomeCherryGrove = 9;
+const int BiomeJungle      = 10;
+
+int computeBiome(float wx, float wz)
+{
+    float temp     = perlinOctave(wx * 0.00012,          wz * 0.00012,          3, 2.0, 0.5);
+    float humidity = perlinOctave(wx * 0.00016 + 500.0,  wz * 0.00016 + 500.0,  3, 2.0, 0.5);
+
+    // Hot
+    if (temp > 0.72)
+        return (humidity > 0.55) ? BiomeJungle : BiomeDesert;
+
+    // Warm
+    if (temp > 0.58)
+        return (humidity > 0.55) ? BiomeCherryGrove : BiomeSavanna;
+
+    // Cold
+    if (temp < 0.25)
+        return BiomeSnowy;
+
+    if (temp < 0.45)
+        return (humidity < 0.45) ? BiomeMountains : BiomeTaiga;
+
+    // Temperate
+    if (humidity > 0.65) return BiomeDarkForest;
+    if (humidity > 0.50) return BiomeForest;
+    if (humidity < 0.35) return BiomePlains;
+    return BiomeBirchForest;
+}
+
+// -------------------------------------------------------------------------
+// Main
+// -------------------------------------------------------------------------
+
+void main()
+{
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= CS || pos.y >= CS) return;
+
+    float wx = float(uChunkXZ.x * CS + pos.x);
+    float wz = float(uChunkXZ.y * CS + pos.y);
+
+    int idx = pos.x + CS * pos.y; // flat column index (x + 32*z)
+
+    heights[idx] = computeSurfaceHeight(wx, wz);
+    biomes[idx]  = computeBiome(wx, wz);
+}

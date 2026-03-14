@@ -215,10 +215,21 @@ public static class SettlementMap
     /// Returns the pre-computed base height for a settlement centre.
     /// Cached via hash — always returns the same value for the same cell.
     /// </summary>
+    // Cache for settlement base heights — same grid cell always returns the same value
+    // and involves 25 × ComputeRawSurfaceHeight calls (~350 noise samples).
+    private static readonly Dictionary<long, float> _baseHeightCache = new();
+
     private static float GetSettlementBaseHeight(int cx, int cz)
     {
+        long key = ((long)cx << 32) | (uint)cz;
+        if (_baseHeightCache.TryGetValue(key, out float cached))
+            return cached;
+
         if (!TryGetSettlement(cx, cz, out _, out float sx, out float sz))
+        {
+            _baseHeightCache[key] = 70f;
             return 70f;
+        }
 
         // Sample terrain height at the settlement centre.
         // We use a small average around the centre for stability.
@@ -230,7 +241,9 @@ public static class SettlementMap
                 sum += ComputeRawSurfaceHeight(sx + dx, sz + dz);
                 count++;
             }
-        return MathF.Floor(sum / count);
+        float result = MathF.Floor(sum / count);
+        _baseHeightCache[key] = result;
+        return result;
     }
 
     /// <summary>
@@ -428,7 +441,7 @@ public static class SettlementMap
         return MathF.Sqrt((px - cx) * (px - cx) + (pz - cz) * (pz - cz));
     }
 
-    private static float SmoothFalloff(float dist, float radius, float maxStrength)
+    public static float SmoothFalloff(float dist, float radius, float maxStrength)
     {
         if (dist >= radius) return 0f;
         float t = 1f - dist / radius;

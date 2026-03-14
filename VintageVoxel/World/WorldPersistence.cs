@@ -163,6 +163,7 @@ public static class WorldPersistence
         foreach (var (key, chunk) in world.Chunks)
         {
             SaveChunk(folder, key, chunk);
+            chunk.IsDirty = false;
             count++;
         }
         return count;

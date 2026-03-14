@@ -3,6 +3,32 @@ using System.Collections.Generic;
 namespace VintageVoxel;
 
 /// <summary>
+/// Pre-computed per-column data that is identical across all Y layers of a chunk column.
+/// Computed once in <see cref="World.Update"/> and shared by all 8 vertical chunks.
+/// </summary>
+public sealed class ColumnData
+{
+    public readonly float[] SurfaceHeights;      // [1024] flattened heightmap
+    public readonly int[] BiomeMap;            // [1024] biome IDs
+    public readonly SettlementMap.ZoneType[] Zones; // [1024]
+    public readonly float[] Dist;                // [1024] distance to settlement center
+    public readonly float MinSurface;
+    public readonly float MaxSurface;
+
+    public ColumnData(float[] surfaceHeights, int[] biomeMap,
+                      SettlementMap.ZoneType[] zones, float[] dist,
+                      float minSurface, float maxSurface)
+    {
+        SurfaceHeights = surfaceHeights;
+        BiomeMap = biomeMap;
+        Zones = zones;
+        Dist = dist;
+        MinSurface = minSurface;
+        MaxSurface = maxSurface;
+    }
+}
+
+/// <summary>
 /// A 32 x 32 x 32 region of blocks stored in a single flat array.
 ///
 /// WHY flat over 3-D array?
@@ -33,6 +59,9 @@ public class Chunk
     public readonly byte[] SunLight = new byte[Volume];
     public readonly byte[] BlockLight = new byte[Volume];
 
+    /// <summary>True when block data has been modified since the last save/load.</summary>
+    public bool IsDirty { get; set; }
+
     public Chunk(OpenTK.Mathematics.Vector3i position)
     {
         Position = position;
@@ -42,6 +71,30 @@ public class Chunk
         // as solid — causing upper air chunks (Y>0) to block all sunlight.
         Array.Fill(_blocks, Block.Air);
         Generate();
+    }
+
+    /// <summary>
+    /// Creates a chunk using pre-computed heightmap and biome arrays from the GPU
+    /// terrain noise compute shader, skipping CPU noise evaluation entirely.
+    /// Settlement flattening is still applied CPU-side as a post-pass.
+    /// </summary>
+    public Chunk(OpenTK.Mathematics.Vector3i position, float[] gpuHeights, int[] gpuBiomes)
+    {
+        Position = position;
+        Array.Fill(_blocks, Block.Air);
+        GenerateFromHeightmap(gpuHeights, gpuBiomes);
+    }
+
+    /// <summary>
+    /// Creates a chunk using pre-computed column data (heightmap, biomes, settlement
+    /// zones) that was already computed once for the entire XZ column.  This avoids
+    /// redundant settlement queries across the 8 vertical layers.
+    /// </summary>
+    public Chunk(OpenTK.Mathematics.Vector3i position, ColumnData col)
+    {
+        Position = position;
+        Array.Fill(_blocks, Block.Air);
+        GenerateFromColumnData(col);
     }
 
     // ------------------------------------------------------------------
@@ -296,6 +349,22 @@ public class Chunk
                                    && chunkWorldYMin > SeaLevel;
         if (entirelyAboveTerrain) return;
 
+        FillTerrain(surfaceHeights, biomeMap, settlementZones, settlementDist, minSurface, maxSurface);
+    }
+
+    /// <summary>
+    /// Shared block-fill logic used by both <see cref="Generate"/> and
+    /// <see cref="GenerateFromHeightmap"/>.  Fills blocks column by column,
+    /// stamps settlement overlays, and places trees.
+    /// </summary>
+    private void FillTerrain(float[] surfaceHeights, int[] biomeMap,
+                             SettlementMap.ZoneType[] settlementZones, float[] settlementDist,
+                             float minSurface, float maxSurface)
+    {
+        int chunkWorldYMin = Position.Y * Size;
+        int startWx = Position.X * Size;
+        int startWz = Position.Z * Size;
+
         // Fill blocks column by column.
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
@@ -316,7 +385,7 @@ public class Chunk
 
                 for (int ly = 0; ly < Size; ly++)
                 {
-                    int wy = chunkWorldYMin + ly; // world-space Y
+                    int wy = chunkWorldYMin + ly;
                     Block b;
 
                     if (wy > surfaceY && wy <= SeaLevel)
@@ -368,8 +437,7 @@ public class Chunk
                 }
             }
 
-        // ── Settlement overlay ──────────────────────────────────────────
-        // After base terrain is filled, stamp roads and buildings on top.
+        // Settlement overlay: stamp roads and buildings on top.
         for (int z = 0; z < Size; z++)
             for (int x = 0; x < Size; x++)
             {
@@ -387,7 +455,6 @@ public class Chunk
 
                 if (zone == SettlementMap.ZoneType.MainRoad || zone == SettlementMap.ZoneType.SecondaryRoad)
                 {
-                    // Inter-settlement roads
                     for (int ly = 0; ly < Size; ly++)
                     {
                         int wy = chunkWorldYMin + ly;
@@ -400,7 +467,6 @@ public class Chunk
                 }
                 else
                 {
-                    // Village or City — determine structure at this column
                     var structure = SettlementMap.GetStructureAt(fwx, fwz, zone, dist);
                     if (structure == SettlementMap.StructureType.None) continue;
 
@@ -415,47 +481,54 @@ public class Chunk
                 }
             }
 
-        // Place trees — scan an extended border region so trees whose trunks land
-        // outside this chunk still deposit leaves inside it (no cross-chunk seams).
+        // Place trees.
         const int border = 4;
-        for (int tz = startWz - border; tz < startWz + Size + border; tz++)
-            for (int tx = startWx - border; tx < startWx + Size + border; tx++)
-            {
-                // Suppress trees inside settlements and on roads.
-                if (SettlementMap.IsInSettlement(tx, tz)) continue;
-                var roadZone = SettlementMap.Query(tx, tz, out _);
-                if (roadZone == SettlementMap.ZoneType.MainRoad
-                    || roadZone == SettlementMap.ZoneType.SecondaryRoad) continue;
+        // Skip tree placement entirely for chunks whose Y range cannot contain any
+        // tree blocks.  Trees grow upward from the surface by at most ~25 blocks
+        // (jungle trees).  The border region (±4 blocks) may have slightly different
+        // heights, so we add a conservative margin.
+        const int treeMaxHeight = 25;
+        const int heightMargin = 20; // for border-region height variance
+        int chunkWorldYMax = chunkWorldYMin + Size - 1;
+        bool canContainTrees = chunkWorldYMax >= (int)minSurface - heightMargin
+                            && chunkWorldYMin <= (int)maxSurface + treeMaxHeight + heightMargin;
 
-                int biome = ComputeBiome(tx, tz);
-                if (biome == BiomeDesert) continue;
+        if (canContainTrees)
+            for (int tz = startWz - border; tz < startWz + Size + border; tz++)
+                for (int tx = startWx - border; tx < startWx + Size + border; tx++)
+                {
+                    // Cheap deterministic hash check first — skip most positions before
+                    // doing any noise evaluations.
+                    int biome = ComputeBiome(tx, tz);
+                    if (biome == BiomeDesert) continue;
 
-                int treeDensity = GetTreeDensity(biome);
-                if (treeDensity <= 0) continue;
+                    int treeDensity = GetTreeDensity(biome);
+                    if (treeDensity <= 0) continue;
 
-                // Vegetation density noise — creates distinct forested areas
-                // vs open veldt / grassland within all biomes.
-                float vegNoise = ComputeVegetationDensity(tx, tz);
+                    if (!ShouldPlaceTree(tx, tz, treeDensity)) continue;
 
-                // Open veldt: no trees at all.
-                if (vegNoise < 0.01f) continue;
+                    float vegNoise = ComputeVegetationDensity(tx, tz);
+                    if (vegNoise < 0.01f) continue;
 
-                // Scale the tree modulo by vegetation density:
-                //   vegNoise near 1 → dense forest (modulo shrinks → more trees)
-                //   vegNoise near 0 → open veldt   (modulo grows huge → virtually no trees)
-                float densityScale = 0.15f + 6.0f * (1f - vegNoise);
-                int adjustedDensity = Math.Max(4, (int)(treeDensity * densityScale));
+                    float densityScale = 0.15f + 6.0f * (1f - vegNoise);
+                    int adjustedDensity = Math.Max(4, (int)(treeDensity * densityScale));
 
-                if (!ShouldPlaceTree(tx, tz, adjustedDensity)) continue;
+                    // Re-check with adjusted density (original treeDensity was a quick pre-filter).
+                    if (adjustedDensity > treeDensity && !ShouldPlaceTree(tx, tz, adjustedDensity)) continue;
 
-                int sy = (int)MathF.Ceiling(ComputeSurfaceHeight(tx, tz)) - 1;
-                if (sy <= SeaLevel) continue;
+                    // Compute surface height — expensive, so only done for surviving candidates.
+                    int sy = (int)MathF.Ceiling(ComputeSurfaceHeight(tx, tz)) - 1;
+                    if (sy <= SeaLevel) continue;
 
-                // Mountains: no trees above the snow line.
-                if (biome == BiomeMountains && sy > 140) continue;
+                    if (biome == BiomeMountains && sy > 140) continue;
 
-                PlaceTreeForBiome(tx, tz, sy, biome);
-            }
+                    // Settlement/road check last — most expensive due to road network queries.
+                    var zone = SettlementMap.Query(tx, tz, out _);
+                    if (zone == SettlementMap.ZoneType.Village || zone == SettlementMap.ZoneType.City) continue;
+                    if (zone == SettlementMap.ZoneType.MainRoad || zone == SettlementMap.ZoneType.SecondaryRoad) continue;
+
+                    PlaceTreeForBiome(tx, tz, sy, biome);
+                }
     }
 
     // ------------------------------------------------------------------
@@ -844,6 +917,138 @@ public class Chunk
                     SetLeaf(lx + dx, ly, lz + dz, 28);
                 }
         }
+    }
+
+    /// <summary>
+    /// Fills terrain using pre-computed heightmap and biome arrays from the GPU
+    /// compute shader.  Settlement flattening, block fill, overlays and tree
+    /// placement all remain CPU-side (identical logic to <see cref="Generate"/>).
+    /// </summary>
+    private void GenerateFromHeightmap(float[] gpuHeights, int[] gpuBiomes)
+    {
+        if (WorldGenConfig.FlatWorld) { GenerateFlat(); return; }
+
+        int chunkWorldYMin = Position.Y * Size;
+
+        var surfaceHeights = new float[Size * Size];
+        var biomeMap = new int[Size * Size];
+
+        int startWx = Position.X * Size;
+        int startWz = Position.Z * Size;
+
+        var settlementZones = new SettlementMap.ZoneType[Size * Size];
+        var settlementDist = new float[Size * Size];
+
+        float minSurface = float.MaxValue;
+        float maxSurface = float.MinValue;
+
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int idx = x + z * Size;
+                float wx = startWx + x;
+                float wz = startWz + z;
+
+                float sh = gpuHeights[idx];
+
+                // Apply settlement terrain flattening (CPU post-pass).
+                float flatFactor = SettlementMap.GetFlatteningFactor(wx, wz);
+                if (flatFactor > 0f)
+                {
+                    float targetH = SettlementMap.GetSettlementTargetHeight(wx, wz);
+                    if (targetH > 0f)
+                        sh = sh + (targetH - sh) * flatFactor;
+                }
+
+                surfaceHeights[idx] = sh;
+                biomeMap[idx] = gpuBiomes[idx];
+
+                settlementZones[idx] = SettlementMap.Query(wx, wz, out float dist);
+                settlementDist[idx] = dist;
+
+                if (sh < minSurface) minSurface = sh;
+                if (sh > maxSurface) maxSurface = sh;
+            }
+
+        bool entirelyAboveTerrain = chunkWorldYMin > (int)MathF.Ceiling(maxSurface) + 24
+                                   && chunkWorldYMin > SeaLevel;
+        if (entirelyAboveTerrain) return;
+
+        FillTerrain(surfaceHeights, biomeMap, settlementZones, settlementDist, minSurface, maxSurface);
+    }
+
+    /// <summary>
+    /// Fast path: uses fully pre-computed <see cref="ColumnData"/> so no settlement
+    /// queries run inside the chunk constructor at all.
+    /// </summary>
+    private void GenerateFromColumnData(ColumnData col)
+    {
+        if (WorldGenConfig.FlatWorld) { GenerateFlat(); return; }
+
+        int chunkWorldYMin = Position.Y * Size;
+        bool entirelyAboveTerrain = chunkWorldYMin > (int)MathF.Ceiling(col.MaxSurface) + 24
+                                   && chunkWorldYMin > SeaLevel;
+        if (entirelyAboveTerrain) return;
+
+        FillTerrain(col.SurfaceHeights, col.BiomeMap, col.Zones, col.Dist,
+                    col.MinSurface, col.MaxSurface);
+    }
+
+    /// <summary>
+    /// Builds <see cref="ColumnData"/> for an XZ column using GPU heightmap/biome
+    /// arrays.  Settlement queries run once here and are shared by all Y-layer chunks.
+    /// </summary>
+    public static ColumnData BuildColumnData(OpenTK.Mathematics.Vector2i colXZ,
+                                             float[] gpuHeights, int[] gpuBiomes)
+    {
+        var surfaceHeights = new float[Size * Size];
+        var biomeMap = new int[Size * Size];
+        var zones = new SettlementMap.ZoneType[Size * Size];
+        var dist = new float[Size * Size];
+
+        int startWx = colXZ.X * Size;
+        int startWz = colXZ.Y * Size;
+        float minSurface = float.MaxValue;
+        float maxSurface = float.MinValue;
+
+        for (int z = 0; z < Size; z++)
+            for (int x = 0; x < Size; x++)
+            {
+                int idx = x + z * Size;
+                float wx = startWx + x;
+                float wz = startWz + z;
+
+                float sh = gpuHeights[idx];
+
+                // Single settlement query per column position (replaces 3 redundant calls).
+                var zone = SettlementMap.Query(wx, wz, out float d);
+                zones[idx] = zone;
+                dist[idx] = d;
+
+                // Apply settlement terrain flattening using the already-queried zone.
+                float flatFactor = zone switch
+                {
+                    SettlementMap.ZoneType.City => SettlementMap.SmoothFalloff(d, 60, 0.95f),
+                    SettlementMap.ZoneType.Village => SettlementMap.SmoothFalloff(d, 40, 0.5f),
+                    SettlementMap.ZoneType.MainRoad => 0.3f,
+                    SettlementMap.ZoneType.SecondaryRoad => 0.2f,
+                    _ => 0f,
+                };
+                if (flatFactor > 0f)
+                {
+                    float targetH = SettlementMap.GetSettlementTargetHeight(wx, wz);
+                    if (targetH > 0f)
+                        sh += (targetH - sh) * flatFactor;
+                }
+
+                surfaceHeights[idx] = sh;
+                biomeMap[idx] = gpuBiomes[idx];
+
+                if (sh < minSurface) minSurface = sh;
+                if (sh > maxSurface) maxSurface = sh;
+            }
+
+        return new ColumnData(surfaceHeights, biomeMap, zones, dist, minSurface, maxSurface);
     }
 
     /// <summary>

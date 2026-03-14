@@ -330,6 +330,64 @@ public static class LightEngine
         return queue.Count == 0;
     }
 
+    /// <summary>
+    /// Seeds the streaming BFS queue with border voxels from a GPU-lit chunk
+    /// and its loaded neighbours so that cross-chunk light bleeding is resolved
+    /// by subsequent <see cref="ContinueStreamBfs"/> calls.
+    /// </summary>
+    public static void SeedBorderBleeding(Chunk chunk, World world)
+    {
+        int bwx = chunk.Position.X * Chunk.Size;
+        int bwy = chunk.Position.Y * Chunk.Size;
+        int bwz = chunk.Position.Z * Chunk.Size;
+
+        // Seed border voxels of the newly lit chunk (bleeding OUT).
+        for (int face = 0; face < 6; face++)
+            SeedSingleFace(chunk, bwx, bwy, bwz, face);
+
+        // Seed border voxels of loaded neighbour chunks (bleeding IN).
+        for (int f = 0; f < 6; f++)
+        {
+            var (dx, dy, dz) = Faces6[f];
+            var nk = new Vector3i(
+                chunk.Position.X + dx, chunk.Position.Y + dy, chunk.Position.Z + dz);
+            if (!world.Chunks.TryGetValue(nk, out var neighbor)) continue;
+
+            int nbwx = neighbor.Position.X * Chunk.Size;
+            int nbwy = neighbor.Position.Y * Chunk.Size;
+            int nbwz = neighbor.Position.Z * Chunk.Size;
+            SeedSingleFace(neighbor, nbwx, nbwy, nbwz, f ^ 1); // opposite face
+        }
+    }
+
+    private static void SeedSingleFace(Chunk chunk, int bwx, int bwy, int bwz, int face)
+    {
+        for (int a = 0; a < Chunk.Size; a++)
+            for (int b = 0; b < Chunk.Size; b++)
+            {
+                int x, y, z;
+                switch (face)
+                {
+                    case 0: x = a; y = Chunk.Size - 1; z = b; break;
+                    case 1: x = a; y = 0; z = b; break;
+                    case 2: x = a; y = b; z = 0; break;
+                    case 3: x = a; y = b; z = Chunk.Size - 1; break;
+                    case 4: x = 0; y = a; z = b; break;
+                    case 5: x = Chunk.Size - 1; y = a; z = b; break;
+                    default: continue;
+                }
+
+                int idx = Chunk.Index(x, y, z);
+                byte sun = chunk.SunLight[idx];
+                byte blk = chunk.BlockLight[idx];
+
+                if (sun > 1)
+                    _streamQueue.Enqueue(new LightNode(bwx + x, bwy + y, bwz + z, sun, isSun: true));
+                if (blk > 1)
+                    _streamQueue.Enqueue(new LightNode(bwx + x, bwy + y, bwz + z, blk, isSun: false));
+            }
+    }
+
     // -------------------------------------------------------------------------
     // Utility
     // -------------------------------------------------------------------------

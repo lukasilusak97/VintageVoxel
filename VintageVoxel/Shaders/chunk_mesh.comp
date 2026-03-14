@@ -1,0 +1,491 @@
+#version 450
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+// -----------------------------------------------------------------------
+// Padded volume: 34x34x34.  Actual chunk data at [1..32] in each axis.
+// Position (0,0,0) in padded coords corresponds to chunk-local (-1,-1,-1).
+// -----------------------------------------------------------------------
+#define CS 32
+#define PS 34
+#define PVOL (PS * PS * PS)
+
+int padIdx(int x, int y, int z) {
+    return x + PS * (y + PS * z);
+}
+
+// -----------------------------------------------------------------------
+// Input SSBOs
+// -----------------------------------------------------------------------
+
+// Block data in padded 34^3 volume.
+// Packing per uint:
+//   bits [15:0]  = blockId
+//   bits [20:16] = layer (0-16)
+//   bits [25:21] = waterLevel (0-16)
+//   bit  [26]    = isTransparent
+//   bit  [27]    = hasModel
+layout(std430, binding = 0) readonly buffer BlockBuf { uint blockData[]; };
+
+// Light data in padded 34^3 volume.
+// bits [3:0] = sunLight (0-15),  bits [7:4] = blockLight (0-15)
+layout(std430, binding = 1) readonly buffer LightBuf { uint lightData[]; };
+
+// Block registry: per block ID, 7 uints.
+//   [0..5] = atlas tile index for faces 0-5
+//   [6]    = flags (bit0 = transparent, bit1 = hasModel)
+#define REG_STRIDE 7
+layout(std430, binding = 2) readonly buffer RegBuf { uint reg[]; };
+
+// -----------------------------------------------------------------------
+// Output SSBOs
+// -----------------------------------------------------------------------
+layout(std430, binding = 3) buffer OVBuf { float oVerts[]; };
+layout(std430, binding = 4) buffer OIBuf { uint  oIdx[];   };
+layout(std430, binding = 5) buffer TVBuf { float tVerts[]; };
+layout(std430, binding = 6) buffer TIBuf { uint  tIdx[];   };
+
+// Atomic counters (reset to 0 before each dispatch)
+layout(std430, binding = 7) buffer CtrBuf {
+    uint oVertCnt;   // opaque vertices emitted
+    uint oIdxCnt;    // opaque indices emitted
+    uint tVertCnt;   // transparent vertices emitted
+    uint tIdxCnt;    // transparent indices emitted
+};
+
+// -----------------------------------------------------------------------
+// Uniforms
+// -----------------------------------------------------------------------
+uniform float uTileUvWidth;
+uniform uint  uMaxVerts;     // max opaque vertex count (safety clamp)
+uniform uint  uMaxIdx;       // max opaque index count
+uniform uint  uMaxTVerts;    // max transparent vertex count
+uniform uint  uMaxTIdx;      // max transparent index count
+
+// -----------------------------------------------------------------------
+// Block data helpers
+// -----------------------------------------------------------------------
+uint  bId(uint p)           { return p & 0xFFFFu; }
+uint  bLayer(uint p)        { return (p >> 16) & 0x1Fu; }
+uint  bWater(uint p)        { return (p >> 21) & 0x1Fu; }
+bool  bTransp(uint p)       { return (p & (1u << 26)) != 0u; }
+bool  bHasModel(uint p)     { return (p & (1u << 27)) != 0u; }
+bool  bEmpty(uint p)        { return bId(p) == 0u; }
+bool  bPartial(uint p)      { uint l = bLayer(p); return l > 0u && l < 16u; }
+bool  bFull(uint p)         { return bLayer(p) >= 16u; }
+bool  bHasWater(uint p)     { return bWater(p) > 0u; }
+float bTopOff(uint p)       { return float(bLayer(p)) / 16.0; }
+float bWaterTop(uint p)     { return float(bWater(p)) / 16.0; }
+
+// Light helpers
+float sunAt(int pi)   { return float(lightData[pi] & 0xFu) / 15.0; }
+float blkAt(int pi)   { return float((lightData[pi] >> 4) & 0xFu) / 15.0; }
+
+// Registry helpers
+uint regTile(uint id, int face) { return reg[id * REG_STRIDE + uint(face)]; }
+
+// -----------------------------------------------------------------------
+// Neighbor offsets
+// -----------------------------------------------------------------------
+const ivec3 NEIGH[6] = ivec3[6](
+    ivec3( 0, 1, 0),   // 0 Top    (+Y)
+    ivec3( 0,-1, 0),   // 1 Bottom (-Y)
+    ivec3( 0, 0,-1),   // 2 North  (-Z)
+    ivec3( 0, 0, 1),   // 3 South  (+Z)
+    ivec3(-1, 0, 0),   // 4 West   (-X)
+    ivec3( 1, 0, 0)    // 5 East   (+X)
+);
+
+const float FACE_SUN_SCALE[6] = float[6](
+    1.00, 0.50, 0.80, 0.80, 0.65, 0.65
+);
+
+// -----------------------------------------------------------------------
+// AO neighbor table  [face*4*3 + vert*3 + k]
+// For each face (6), each vertex (4), 3 neighbor offsets (dx,dy,dz).
+// -----------------------------------------------------------------------
+const ivec3 AO_TABLE[72] = ivec3[72](
+    // face 0  Top (+Y)
+    ivec3(-1,+1, 0), ivec3( 0,+1,-1), ivec3(-1,+1,-1),
+    ivec3(-1,+1, 0), ivec3( 0,+1,+1), ivec3(-1,+1,+1),
+    ivec3(+1,+1, 0), ivec3( 0,+1,+1), ivec3(+1,+1,+1),
+    ivec3(+1,+1, 0), ivec3( 0,+1,-1), ivec3(+1,+1,-1),
+    // face 1  Bottom (-Y)
+    ivec3(-1,-1, 0), ivec3( 0,-1,-1), ivec3(-1,-1,-1),
+    ivec3(+1,-1, 0), ivec3( 0,-1,-1), ivec3(+1,-1,-1),
+    ivec3(+1,-1, 0), ivec3( 0,-1,+1), ivec3(+1,-1,+1),
+    ivec3(-1,-1, 0), ivec3( 0,-1,+1), ivec3(-1,-1,+1),
+    // face 2  North (-Z)
+    ivec3(-1, 0,-1), ivec3( 0,-1,-1), ivec3(-1,-1,-1),
+    ivec3(-1, 0,-1), ivec3( 0,+1,-1), ivec3(-1,+1,-1),
+    ivec3(+1, 0,-1), ivec3( 0,+1,-1), ivec3(+1,+1,-1),
+    ivec3(+1, 0,-1), ivec3( 0,-1,-1), ivec3(+1,-1,-1),
+    // face 3  South (+Z)
+    ivec3(+1, 0,+1), ivec3( 0,-1,+1), ivec3(+1,-1,+1),
+    ivec3(+1, 0,+1), ivec3( 0,+1,+1), ivec3(+1,+1,+1),
+    ivec3(-1, 0,+1), ivec3( 0,+1,+1), ivec3(-1,+1,+1),
+    ivec3(-1, 0,+1), ivec3( 0,-1,+1), ivec3(-1,-1,+1),
+    // face 4  West (-X)
+    ivec3(-1, 0,+1), ivec3(-1,-1, 0), ivec3(-1,-1,+1),
+    ivec3(-1, 0,+1), ivec3(-1,+1, 0), ivec3(-1,+1,+1),
+    ivec3(-1, 0,-1), ivec3(-1,+1, 0), ivec3(-1,+1,-1),
+    ivec3(-1, 0,-1), ivec3(-1,-1, 0), ivec3(-1,-1,-1),
+    // face 5  East (+X)
+    ivec3(+1, 0,-1), ivec3(+1,-1, 0), ivec3(+1,-1,-1),
+    ivec3(+1, 0,-1), ivec3(+1,+1, 0), ivec3(+1,+1,-1),
+    ivec3(+1, 0,+1), ivec3(+1,+1, 0), ivec3(+1,+1,+1),
+    ivec3(+1, 0,+1), ivec3(+1,-1, 0), ivec3(+1,-1,+1)
+);
+
+// -----------------------------------------------------------------------
+// AO + smooth lighting for a single vertex
+// -----------------------------------------------------------------------
+bool isSolid(int pi) {
+    uint p = blockData[pi];
+    return !bTransp(p) && bFull(p);
+}
+
+void computeVertexLighting(
+    int px, int py, int pz,
+    int face, int vert, float dirScale,
+    out float ao, out float sun, out float blk)
+{
+    int aoBase = face * 12 + vert * 3;
+
+    // AO: count solid neighbors
+    int solid = 0;
+    for (int k = 0; k < 3; k++) {
+        ivec3 o = AO_TABLE[aoBase + k];
+        if (isSolid(padIdx(px + o.x, py + o.y, pz + o.z)))
+            solid++;
+    }
+    ao = (solid == 0) ? 1.0 :
+         (solid == 1) ? 0.875 :
+         (solid == 2) ? 0.75 : 0.625;
+
+    // Smooth light: average face-adjacent + 3 AO neighbors
+    ivec3 fn = NEIGH[face];
+    float sumSun = sunAt(padIdx(px + fn.x, py + fn.y, pz + fn.z));
+    float sumBlk = blkAt(padIdx(px + fn.x, py + fn.y, pz + fn.z));
+    int cnt = 1;
+    for (int k = 0; k < 3; k++) {
+        ivec3 o = AO_TABLE[aoBase + k];
+        int np = padIdx(px + o.x, py + o.y, pz + o.z);
+        sumSun += sunAt(np);
+        sumBlk += blkAt(np);
+        cnt++;
+    }
+    sun = (sumSun / float(cnt)) * dirScale;
+    blk = sumBlk / float(cnt);
+}
+
+// -----------------------------------------------------------------------
+// Write one vertex (8 floats) to the given buffer at the given offset
+// -----------------------------------------------------------------------
+void writeVertex(int bufType, uint off,
+                 float x, float y, float z,
+                 float u, float v,
+                 float s, float b, float a)
+{
+    uint base8 = off * 8u;
+    if (bufType == 0) {
+        oVerts[base8    ] = x;
+        oVerts[base8 + 1u] = y;
+        oVerts[base8 + 2u] = z;
+        oVerts[base8 + 3u] = u;
+        oVerts[base8 + 4u] = v;
+        oVerts[base8 + 5u] = s;
+        oVerts[base8 + 6u] = b;
+        oVerts[base8 + 7u] = a;
+    } else {
+        tVerts[base8    ] = x;
+        tVerts[base8 + 1u] = y;
+        tVerts[base8 + 2u] = z;
+        tVerts[base8 + 3u] = u;
+        tVerts[base8 + 4u] = v;
+        tVerts[base8 + 5u] = s;
+        tVerts[base8 + 6u] = b;
+        tVerts[base8 + 7u] = a;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Emit one terrain face (4 verts + 6 indices) into the opaque buffer
+// -----------------------------------------------------------------------
+void emitOpaqueFace(int face,
+                    int px, int py, int pz,
+                    float bx, float by, float bz,
+                    uint blockId, float topOff)
+{
+    uint tileIdx = regTile(blockId, face);
+    float u0 = float(tileIdx) * uTileUvWidth;
+    float u1 = float(tileIdx + 1u) * uTileUvWidth;
+
+    float vTop = (face >= 2) ? (1.0 - topOff) : 0.0;
+
+    float h = topOff;
+    float x0 = bx;       float x1 = bx + 1.0;
+    float y0 = by;       float y1 = by + h;
+    float z0 = bz;       float z1 = bz + 1.0;
+
+    float ds = FACE_SUN_SCALE[face];
+
+    // Compute per-vertex lighting
+    float ao0, ao1, ao2, ao3;
+    float s0, s1, s2, s3;
+    float b0, b1, b2, b3;
+    computeVertexLighting(px, py, pz, face, 0, ds, ao0, s0, b0);
+    computeVertexLighting(px, py, pz, face, 1, ds, ao1, s1, b1);
+    computeVertexLighting(px, py, pz, face, 2, ds, ao2, s2, b2);
+    computeVertexLighting(px, py, pz, face, 3, ds, ao3, s3, b3);
+
+    bool flip = (ao0 + ao2 < ao1 + ao3);
+
+    // Reserve output space
+    uint vOff = atomicAdd(oVertCnt, 4u);
+    uint iOff = atomicAdd(oIdxCnt, 6u);
+    if (vOff + 4u > uMaxVerts || iOff + 6u > uMaxIdx) return;
+
+    // Write vertices per face
+    if (face == 0) { // Top (+Y)
+        writeVertex(0, vOff,     x0, y1, z0, u0, 0.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x0, y1, z1, u0, 1.0, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x1, y1, z1, u1, 1.0, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x1, y1, z0, u1, 0.0, s3, b3, ao3);
+    } else if (face == 1) { // Bottom (-Y)
+        writeVertex(0, vOff,     x0, y0, z0, u0, 0.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x1, y0, z0, u1, 0.0, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x1, y0, z1, u1, 1.0, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x0, y0, z1, u0, 1.0, s3, b3, ao3);
+    } else if (face == 2) { // North (-Z)
+        writeVertex(0, vOff,     x0, y0, z0, u0, 1.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x0, y1, z0, u0, vTop, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x1, y1, z0, u1, vTop, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x1, y0, z0, u1, 1.0, s3, b3, ao3);
+    } else if (face == 3) { // South (+Z)
+        writeVertex(0, vOff,     x1, y0, z1, u0, 1.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x1, y1, z1, u0, vTop, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x0, y1, z1, u1, vTop, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x0, y0, z1, u1, 1.0, s3, b3, ao3);
+    } else if (face == 4) { // West (-X)
+        writeVertex(0, vOff,     x0, y0, z1, u0, 1.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x0, y1, z1, u0, vTop, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x0, y1, z0, u1, vTop, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x0, y0, z0, u1, 1.0, s3, b3, ao3);
+    } else { // East (+X)
+        writeVertex(0, vOff,     x1, y0, z0, u0, 1.0, s0, b0, ao0);
+        writeVertex(0, vOff + 1u, x1, y1, z0, u0, vTop, s1, b1, ao1);
+        writeVertex(0, vOff + 2u, x1, y1, z1, u1, vTop, s2, b2, ao2);
+        writeVertex(0, vOff + 3u, x1, y0, z1, u1, 1.0, s3, b3, ao3);
+    }
+
+    // Write indices with AO-based quad flip
+    if (flip) {
+        oIdx[iOff     ] = vOff;
+        oIdx[iOff + 1u] = vOff + 1u;
+        oIdx[iOff + 2u] = vOff + 3u;
+        oIdx[iOff + 3u] = vOff + 1u;
+        oIdx[iOff + 4u] = vOff + 2u;
+        oIdx[iOff + 5u] = vOff + 3u;
+    } else {
+        oIdx[iOff     ] = vOff;
+        oIdx[iOff + 1u] = vOff + 1u;
+        oIdx[iOff + 2u] = vOff + 2u;
+        oIdx[iOff + 3u] = vOff;
+        oIdx[iOff + 4u] = vOff + 2u;
+        oIdx[iOff + 5u] = vOff + 3u;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Emit one water face into the transparent buffer
+// -----------------------------------------------------------------------
+void emitWaterFace(int face,
+                   int px, int py, int pz,
+                   float bx, float by, float bz,
+                   float topOff,
+                   bool shoreN, bool shoreS, bool shoreW, bool shoreE,
+                   bool shoreNW, bool shoreNE, bool shoreSW, bool shoreSE)
+{
+    float ds = FACE_SUN_SCALE[face];
+    float ao0, ao1, ao2, ao3;
+    float s0, s1, s2, s3;
+    float b0, b1, b2, b3;
+    computeVertexLighting(px, py, pz, face, 0, ds, ao0, s0, b0);
+    computeVertexLighting(px, py, pz, face, 1, ds, ao1, s1, b1);
+    computeVertexLighting(px, py, pz, face, 2, ds, ao2, s2, b2);
+    computeVertexLighting(px, py, pz, face, 3, ds, ao3, s3, b3);
+
+    bool flip = (ao0 + ao2 < ao1 + ao3);
+
+    // Shore proximity per vertex (stored in uv.x for foam)
+    float sh0, sh1, sh2, sh3;
+    if (face == 0) {
+        sh0 = (shoreW || shoreN || shoreNW) ? 1.0 : 0.0;
+        sh1 = (shoreW || shoreS || shoreSW) ? 1.0 : 0.0;
+        sh2 = (shoreE || shoreS || shoreSE) ? 1.0 : 0.0;
+        sh3 = (shoreE || shoreN || shoreNE) ? 1.0 : 0.0;
+    } else if (face == 1) {
+        sh0 = 0.0; sh1 = 0.0; sh2 = 0.0; sh3 = 0.0;
+    } else {
+        sh0 = 1.0; sh1 = 1.0; sh2 = 1.0; sh3 = 1.0;
+    }
+
+    float h = topOff;
+    float x0 = bx;       float x1 = bx + 1.0;
+    float y0 = by;       float y1 = by + h;
+    float z0 = bz;       float z1 = bz + 1.0;
+
+    uint vOff = atomicAdd(tVertCnt, 4u);
+    uint iOff = atomicAdd(tIdxCnt, 6u);
+    if (vOff + 4u > uMaxTVerts || iOff + 6u > uMaxTIdx) return;
+
+    if (face == 0) {
+        writeVertex(1, vOff,     x0, y1, z0, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x0, y1, z1, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x1, y1, z1, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x1, y1, z0, sh3, 0.0, s3, b3, ao3);
+    } else if (face == 1) {
+        writeVertex(1, vOff,     x0, y0, z0, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x1, y0, z0, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x1, y0, z1, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x0, y0, z1, sh3, 0.0, s3, b3, ao3);
+    } else if (face == 2) {
+        writeVertex(1, vOff,     x0, y0, z0, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x0, y1, z0, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x1, y1, z0, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x1, y0, z0, sh3, 0.0, s3, b3, ao3);
+    } else if (face == 3) {
+        writeVertex(1, vOff,     x1, y0, z1, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x1, y1, z1, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x0, y1, z1, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x0, y0, z1, sh3, 0.0, s3, b3, ao3);
+    } else if (face == 4) {
+        writeVertex(1, vOff,     x0, y0, z1, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x0, y1, z1, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x0, y1, z0, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x0, y0, z0, sh3, 0.0, s3, b3, ao3);
+    } else {
+        writeVertex(1, vOff,     x1, y0, z0, sh0, 0.0, s0, b0, ao0);
+        writeVertex(1, vOff+1u, x1, y1, z0, sh1, 0.0, s1, b1, ao1);
+        writeVertex(1, vOff+2u, x1, y1, z1, sh2, 0.0, s2, b2, ao2);
+        writeVertex(1, vOff+3u, x1, y0, z1, sh3, 0.0, s3, b3, ao3);
+    }
+
+    if (flip) {
+        tIdx[iOff     ] = vOff;
+        tIdx[iOff + 1u] = vOff + 1u;
+        tIdx[iOff + 2u] = vOff + 3u;
+        tIdx[iOff + 3u] = vOff + 1u;
+        tIdx[iOff + 4u] = vOff + 2u;
+        tIdx[iOff + 5u] = vOff + 3u;
+    } else {
+        tIdx[iOff     ] = vOff;
+        tIdx[iOff + 1u] = vOff + 1u;
+        tIdx[iOff + 2u] = vOff + 2u;
+        tIdx[iOff + 3u] = vOff;
+        tIdx[iOff + 4u] = vOff + 2u;
+        tIdx[iOff + 5u] = vOff + 3u;
+    }
+}
+
+// -----------------------------------------------------------------------
+// Main
+// -----------------------------------------------------------------------
+void main() {
+    // Block local coordinates within the chunk [0, 31]
+    int lx = int(gl_GlobalInvocationID.x);
+    int ly = int(gl_GlobalInvocationID.y);
+    int lz = int(gl_GlobalInvocationID.z);
+    if (lx >= CS || ly >= CS || lz >= CS) return;
+
+    // Padded coordinates (offset by 1 for the border)
+    int px = lx + 1;
+    int py = ly + 1;
+    int pz = lz + 1;
+
+    int pi = padIdx(px, py, pz);
+    uint blk = blockData[pi];
+
+    bool empty = bEmpty(blk);
+    bool water = bHasWater(blk);
+    if (empty && !water) return;
+    if (!empty && bHasModel(blk)) return;
+
+    bool hasTerrain = !empty;
+    bool partial = bPartial(blk);
+    bool transp  = bTransp(blk);
+    float topOff = bTopOff(blk);
+    uint blockId = bId(blk);
+
+    float bx = float(lx);
+    float by = float(ly);
+    float bz = float(lz);
+
+    // --- Emit terrain faces ---
+    if (hasTerrain) {
+        for (int face = 0; face < 6; face++) {
+            ivec3 d = NEIGH[face];
+            int ni = padIdx(px + d.x, py + d.y, pz + d.z);
+            uint nb = blockData[ni];
+
+            bool exposed;
+            if (partial) {
+                if (face == 0) {
+                    exposed = true;
+                } else if (face == 1) {
+                    exposed = transp
+                        ? (bId(nb) == 0u && !bHasWater(nb))
+                        : bTransp(nb);
+                } else {
+                    exposed = transp
+                        ? (bId(nb) == 0u && !bHasWater(nb))
+                        : (bTransp(nb) || bPartial(nb));
+                }
+            } else {
+                if (transp) {
+                    exposed = (bId(nb) == 0u && !bHasWater(nb));
+                } else {
+                    exposed = bTransp(nb) || bPartial(nb);
+                }
+            }
+
+            if (exposed)
+                emitOpaqueFace(face, px, py, pz, bx, by, bz, blockId, topOff);
+        }
+    }
+
+    // --- Emit water overlay faces ---
+    if (water) {
+        float wTop = bWaterTop(blk);
+
+        // Shore checks for 4 cardinal + 4 diagonal neighbors
+        bool shN  = !bHasWater(blockData[padIdx(px,   py, pz-1)]);
+        bool shS  = !bHasWater(blockData[padIdx(px,   py, pz+1)]);
+        bool shW  = !bHasWater(blockData[padIdx(px-1, py, pz  )]);
+        bool shE  = !bHasWater(blockData[padIdx(px+1, py, pz  )]);
+        bool shNW = !bHasWater(blockData[padIdx(px-1, py, pz-1)]);
+        bool shNE = !bHasWater(blockData[padIdx(px+1, py, pz-1)]);
+        bool shSW = !bHasWater(blockData[padIdx(px-1, py, pz+1)]);
+        bool shSE = !bHasWater(blockData[padIdx(px+1, py, pz+1)]);
+
+        for (int face = 0; face < 6; face++) {
+            ivec3 d = NEIGH[face];
+            int ni = padIdx(px + d.x, py + d.y, pz + d.z);
+            uint nb = blockData[ni];
+
+            bool exposed;
+            if (face == 0) {
+                exposed = !bHasWater(nb);
+            } else if (face == 1) {
+                exposed = !hasTerrain && !bHasWater(nb)
+                          && (bTransp(nb) || bPartial(nb));
+            } else {
+                exposed = !bHasWater(nb);
+            }
+
+            if (exposed)
+                emitWaterFace(face, px, py, pz, bx, by, bz, wTop,
+                              shN, shS, shW, shE, shNW, shNE, shSW, shSE);
+        }
+    }
+}

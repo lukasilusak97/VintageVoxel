@@ -25,6 +25,7 @@ public sealed class WorldRenderer : IDisposable
     private readonly EntityRenderer _entityRenderer;
     private readonly Inventory _inventory;
     private readonly ChunkBorderRenderer _borders;
+    private readonly ComputeMesher _computeMesher;
 
     private float _elapsedTime;
 
@@ -62,6 +63,7 @@ public sealed class WorldRenderer : IDisposable
         _borders = new ChunkBorderRenderer();
         _shadowShader = new Shader("Shaders/shadow.vert", "Shaders/shadow.frag");
         _waterShader = new Shader("Shaders/water.vert", "Shaders/water.frag");
+        _computeMesher = new ComputeMesher();
         InitShadowMap();
     }
 
@@ -137,13 +139,10 @@ public sealed class WorldRenderer : IDisposable
     // Chunk GPU lifecycle
     // -------------------------------------------------------------------------
 
-    /// <summary>Meshes <paramref name="chunk"/> and uploads opaque + transparent GPU data.</summary>
+    /// <summary>Meshes <paramref name="chunk"/> on the GPU and returns opaque + transparent handles.</summary>
     private (GpuMesh opaque, GpuMesh transparent) UploadChunkGpu(Chunk chunk)
     {
-        ChunkMesh mesh = ChunkMeshBuilder.Build(chunk, _world);
-        var opaque = _gpu.UploadMesh(mesh.Vertices, mesh.Indices, 8);
-        var transparent = _gpu.UploadMesh(mesh.TransparentVertices, mesh.TransparentIndices, 8);
-        return (opaque, transparent);
+        return _computeMesher.MeshChunk(chunk, _world);
     }
 
     /// <summary>
@@ -153,8 +152,8 @@ public sealed class WorldRenderer : IDisposable
     public void RebuildChunk(Vector3i key)
     {
         if (!_world.Chunks.TryGetValue(key, out var chunk)) return;
-        if (_chunkGpuData.TryGetValue(key, out var old)) _gpu.Free(old);
-        if (_chunkTransGpuData.TryGetValue(key, out var oldTrans)) _gpu.Free(oldTrans);
+        if (_chunkGpuData.TryGetValue(key, out var old)) FreeGpuMesh(old);
+        if (_chunkTransGpuData.TryGetValue(key, out var oldTrans)) FreeGpuMesh(oldTrans);
         var (opaque, transparent) = UploadChunkGpu(chunk);
         _chunkGpuData[key] = opaque;
         _chunkTransGpuData[key] = transparent;
@@ -165,12 +164,12 @@ public sealed class WorldRenderer : IDisposable
     {
         if (_chunkGpuData.TryGetValue(key, out var gpu))
         {
-            _gpu.Free(gpu);
+            FreeGpuMesh(gpu);
             _chunkGpuData.Remove(key);
         }
         if (_chunkTransGpuData.TryGetValue(key, out var transGpu))
         {
-            _gpu.Free(transGpu);
+            FreeGpuMesh(transGpu);
             _chunkTransGpuData.Remove(key);
         }
     }
@@ -650,17 +649,26 @@ public sealed class WorldRenderer : IDisposable
     public void Dispose()
     {
         foreach (var gpu in _chunkGpuData.Values)
-            _gpu.Free(gpu);
+            FreeGpuMesh(gpu);
         _chunkGpuData.Clear();
 
         foreach (var gpu in _chunkTransGpuData.Values)
-            _gpu.Free(gpu);
+            FreeGpuMesh(gpu);
         _chunkTransGpuData.Clear();
 
+        _computeMesher.Dispose();
         _borders.Dispose();
         _shadowShader.Dispose();
         _waterShader.Dispose();
         GL.DeleteFramebuffer(_shadowFbo);
         GL.DeleteTexture(_shadowDepthTex);
+    }
+
+    /// <summary>Frees a GpuMesh regardless of whether it was allocated via GpuResourceManager or ComputeMesher.</summary>
+    private void FreeGpuMesh(GpuMesh mesh)
+    {
+        GL.DeleteVertexArray(mesh.Vao);
+        GL.DeleteBuffer(mesh.Vbo);
+        GL.DeleteBuffer(mesh.Ebo);
     }
 }

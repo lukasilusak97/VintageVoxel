@@ -78,7 +78,18 @@ public class World
     // -------------------------------------------------------------------------
 
     /// <summary>Max chunks to generate (terrain noise) per frame to avoid spikes.</summary>
-    private const int MaxChunkGenPerFrame = 8;
+    private const int MaxChunkGenPerFrame = 4;
+
+    /// <summary>
+    /// Optional GPU terrain generator. When set, chunk creation uses the GPU
+    /// compute shader for heightmap/biome computation instead of CPU noise.
+    /// </summary>
+    public GpuTerrainGenerator? GpuTerrain { get; set; }
+
+    // Caches GPU terrain + settlement data for partially-completed columns so
+    // a column split across two frames doesn't re-dispatch the GPU or re-run
+    // settlement queries.
+    private readonly Dictionary<Vector2i, ColumnData> _columnCache = new();
 
     /// <summary>
     /// Loads chunks within <see cref="RenderDistance"/> of <paramref name="playerPos"/>
@@ -91,17 +102,18 @@ public class World
     /// </summary>
     public void Update(Vector3 playerPos,
                        out List<Vector3i> added,
-                       out List<Vector3i> removed)
+                       out List<Vector3i> removed,
+                       out List<(Vector3i key, Chunk chunk)> removedDirty)
     {
         added = new List<Vector3i>();
         removed = new List<Vector3i>();
+        removedDirty = new List<(Vector3i, Chunk)>();
 
         Vector2i center = WorldToChunk(playerPos);
 
         // Generate missing chunks within the render square, across all vertical layers.
-        // Rate-limited to avoid frame spikes from noise-based terrain generation.
-        // Build a list of missing columns sorted by Manhattan distance from the player
-        // so nearby chunks are generated first.
+        // Rate-limited to avoid frame spikes from terrain generation.
+        // Nearby columns are generated first (ring-by-ring distance order).
         int generated = 0;
         for (int dist = 0; dist <= RenderDistance && generated < MaxChunkGenPerFrame; dist++)
             for (int dz = -dist; dz <= dist && generated < MaxChunkGenPerFrame; dz++)
@@ -109,16 +121,59 @@ public class World
                 {
                     // Only process the ring at this distance, skip interior (already handled).
                     if (Math.Abs(dx) != dist && Math.Abs(dz) != dist) continue;
+
+                    // Check if any Y layer in this column is missing.
+                    bool anyMissing = false;
+                    for (int cy = 0; cy < MaxChunkY; cy++)
+                    {
+                        if (!_chunks.ContainsKey(new Vector3i(center.X + dx, cy, center.Y + dz)))
+                        { anyMissing = true; break; }
+                    }
+                    if (!anyMissing) continue;
+
+                    var colXZ = new Vector2i(center.X + dx, center.Y + dz);
+
+                    // Reuse cached column data if this column was partially completed last frame.
+                    if (!_columnCache.TryGetValue(colXZ, out ColumnData? colData))
+                    {
+                        // Compute heightmap + biome once per XZ column (GPU or CPU).
+                        if (GpuTerrain != null && !WorldGenConfig.FlatWorld)
+                        {
+                            GpuTerrain.Generate(colXZ, out float[] gpuHeights, out int[] gpuBiomes);
+                            colData = Chunk.BuildColumnData(colXZ, gpuHeights, gpuBiomes);
+                        }
+                        else
+                        {
+                            colData = null;
+                        }
+
+                        // Cache for subsequent frames if we can't finish the whole column now.
+                        if (colData != null)
+                            _columnCache[colXZ] = colData;
+                    }
+
+                    bool columnComplete = true;
                     for (int cy = 0; cy < MaxChunkY && generated < MaxChunkGenPerFrame; cy++)
                     {
                         var key = new Vector3i(center.X + dx, cy, center.Y + dz);
                         if (!_chunks.ContainsKey(key))
                         {
-                            _chunks[key] = new Chunk(key);
+                            _chunks[key] = colData != null
+                                ? new Chunk(key, colData)
+                                : new Chunk(key);
                             added.Add(key);
                             generated++;
                         }
                     }
+
+                    // Check if we finished all Y layers for this column.
+                    for (int cy = 0; cy < MaxChunkY; cy++)
+                    {
+                        if (!_chunks.ContainsKey(new Vector3i(colXZ.X, cy, colXZ.Y)))
+                        { columnComplete = false; break; }
+                    }
+                    if (columnComplete)
+                        _columnCache.Remove(colXZ);
                 }
 
         // Unload chunks whose XZ column moved outside the buffer zone.
@@ -127,8 +182,22 @@ public class World
             if (Math.Abs(key.X - center.X) > UnloadDistance ||
                 Math.Abs(key.Z - center.Y) > UnloadDistance)
             {
+                var chunk = _chunks[key];
+                if (chunk.IsDirty)
+                    removedDirty.Add((key, chunk));
                 _chunks.Remove(key);
                 removed.Add(key);
+            }
+        }
+
+        // Evict stale column cache entries for columns that moved out of range.
+        if (_columnCache.Count > 0)
+        {
+            foreach (var colKey in new List<Vector2i>(_columnCache.Keys))
+            {
+                if (Math.Abs(colKey.X - center.X) > UnloadDistance ||
+                    Math.Abs(colKey.Y - center.Y) > UnloadDistance)
+                    _columnCache.Remove(colKey);
             }
         }
     }
@@ -198,6 +267,7 @@ public class World
         int lz = worldZ - cz * Chunk.Size;
         ref Block b = ref chunk.GetBlock(lx, ly, lz);
         b = block;
+        chunk.IsDirty = true;
         return true;
     }
 

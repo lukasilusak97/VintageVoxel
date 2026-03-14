@@ -83,7 +83,7 @@ public sealed class GameServer : IDisposable
         // Build the server-side world (no renderer needed).
         _world = new World();
         // Pre-load the origin area so the first client doesn't stall.
-        _world.Update(new Vector3(0, 0, 0), out var initial, out _);
+        _world.Update(new Vector3(0, 0, 0), out var initial, out _, out _);
         foreach (var key in initial)
         {
             if (WorldPersistence.TryLoadChunk(_savePath, key, out Chunk? saved))
@@ -404,7 +404,7 @@ public sealed class GameServer : IDisposable
                     // Ensure the chunk is loaded server-side.
                     if (!_world.Chunks.TryGetValue(key, out Chunk? chunk))
                     {
-                        _world.Update(cp.Position, out _, out _);
+                        _world.Update(cp.Position, out _, out _, out _);
                         if (!_world.Chunks.TryGetValue(key, out chunk)) continue;
                     }
 

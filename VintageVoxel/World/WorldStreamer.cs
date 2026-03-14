@@ -11,17 +11,19 @@ namespace VintageVoxel;
 /// of chunks are fully processed per frame so the game stays responsive while new
 /// terrain streams in progressively.
 /// </summary>
-public sealed class WorldStreamer
+public sealed class WorldStreamer : IDisposable
 {
     private readonly World _world;
     private readonly WorldRenderer _renderer;
     private readonly string _savePath;
+    private readonly GpuLightEngine _gpuLightEngine;
+    private readonly GpuTerrainGenerator _gpuTerrainGenerator;
 
     /// <summary>Max chunks to fully process (disk load + light seed) per frame.</summary>
-    private const int MaxChunksPerFrame = 1;
+    private const int MaxChunksPerFrame = 2;
 
     /// <summary>Max total mesh rebuilds per frame (new chunks + their neighbors).</summary>
-    private const int MaxMeshRebuildsPerFrame = 2;
+    private const int MaxMeshRebuildsPerFrame = 4;
 
     /// <summary>Max BFS light nodes to propagate per frame (~1-3ms budget).</summary>
     private const int MaxBfsNodesPerFrame = 20_000;
@@ -31,6 +33,7 @@ public sealed class WorldStreamer
     private readonly HashSet<Vector3i> _pendingSet = new();
     // Neighbor meshes deferred to subsequent frames.
     private readonly List<Vector3i> _pendingMeshRebuild = new();
+    private readonly HashSet<Vector3i> _pendingMeshSet = new();
 
     /// <summary>Number of chunks still waiting to be loaded and lit.</summary>
     public int PendingLoadCount => _pendingLoad.Count;
@@ -47,6 +50,9 @@ public sealed class WorldStreamer
         _world = world;
         _renderer = renderer;
         _savePath = savePath;
+        _gpuLightEngine = new GpuLightEngine();
+        _gpuTerrainGenerator = new GpuTerrainGenerator();
+        _world.GpuTerrain = _gpuTerrainGenerator;
     }
 
     /// <summary>
@@ -64,8 +70,12 @@ public sealed class WorldStreamer
             _renderer.RebuildChunk(key);
 
         Profiler.Begin("Chunk Stream: World Update");
-        _world.Update(playerPos, out var added, out var removed);
+        _world.Update(playerPos, out var added, out var removed, out var removedDirty);
         Profiler.End("Chunk Stream: World Update");
+
+        // Persist any dirty chunks before freeing their resources.
+        foreach (var (dirtyKey, dirtyChunk) in removedDirty)
+            WorldPersistence.SaveChunk(_savePath, dirtyKey, dirtyChunk);
 
         Profiler.Begin("Chunk Stream: Unload");
         foreach (var key in removed)
@@ -113,21 +123,24 @@ public sealed class WorldStreamer
             }
             Profiler.End("Chunk Stream: Disk Load");
 
-            // Seed lighting into the amortized BFS queue (does NOT propagate yet).
-            Profiler.Begin("Chunk Stream: Lighting");
+            // GPU-compute intra-chunk lighting, then seed border BFS for cross-chunk bleeding.
+            Profiler.Begin("Chunk Stream: GPU Lighting");
             foreach (var key in batch.OrderByDescending(k => k.Y))
             {
                 if (_world.Chunks.TryGetValue(key, out var newChunk))
-                    LightEngine.SeedChunkStreaming(newChunk, _world);
+                {
+                    _gpuLightEngine.ComputeChunk(newChunk, _world);
+                    LightEngine.SeedBorderBleeding(newChunk, _world);
+                }
             }
             LightEngine.ContinueStreamBfs(_world, MaxBfsNodesPerFrame);
-            Profiler.End("Chunk Stream: Lighting");
+            Profiler.End("Chunk Stream: GPU Lighting");
 
             // Queue the batch chunk and its face-adjacent neighbours for meshing,
-            // skipping neighbours still pending load — they'll be meshed when processed.
+            // skipping neighbours still pending load -- they'll be meshed when processed.
             foreach (var key in batch)
             {
-                if (!_pendingMeshRebuild.Contains(key))
+                if (_pendingMeshSet.Add(key))
                     _pendingMeshRebuild.Insert(0, key);
 
                 var neighbors = new Vector3i[]
@@ -138,7 +151,7 @@ public sealed class WorldStreamer
                 };
                 foreach (var nb in neighbors)
                 {
-                    if (!_pendingSet.Contains(nb) && !_pendingMeshRebuild.Contains(nb))
+                    if (!_pendingSet.Contains(nb) && _pendingMeshSet.Add(nb))
                         _pendingMeshRebuild.Add(nb);
                 }
             }
@@ -171,9 +184,18 @@ public sealed class WorldStreamer
             });
             int meshCount = Math.Min(_pendingMeshRebuild.Count, MaxMeshRebuildsPerFrame);
             for (int i = 0; i < meshCount; i++)
+            {
                 _renderer.RebuildChunk(_pendingMeshRebuild[i]);
+                _pendingMeshSet.Remove(_pendingMeshRebuild[i]);
+            }
             _pendingMeshRebuild.RemoveRange(0, meshCount);
             Profiler.End("Chunk Stream: Mesh Upload");
         }
+    }
+
+    public void Dispose()
+    {
+        _gpuLightEngine.Dispose();
+        _gpuTerrainGenerator.Dispose();
     }
 }

@@ -72,6 +72,12 @@ public static class NoiseGenerator
     // -------------------------------------------------------------------------
 
     /// <summary>
+    /// Returns a copy of the current 512-entry permutation table for upload to
+    /// the GPU terrain noise compute shader.
+    /// </summary>
+    public static int[] GetPermutationTable() => (int[])P.Clone();
+
+    /// <summary>
     /// Returns a single Perlin noise value for (x, y) in approximately [-1, 1].
     /// </summary>
     public static float Sample2D(float x, float y)
